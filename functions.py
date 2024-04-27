@@ -26,21 +26,22 @@ def build_pinn_model(input_shape=2, num_neurons=100, num_layers=4, output_shape=
 # Define the physics-informed loss function within the main.py, so it has access to the pinn_model
 def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
     def nlse_loss(z, t, A_pred):
-        # Define the physics-informed loss here...
         with tf.GradientTape(persistent=True) as tape:
-            tape.watch([z, t])
+            tape.watch([z, t, A_pred])  # Ensure all variables are being watched
 
-            # Compute first order derivatives
+            # Calculate gradients outside the inner tape context
+            # Note: Nested tape is required only if you need higher-order derivatives
             A_pred_z = tape.gradient(A_pred, z)
-
-            # Compute second order derivatives w.r.t t
             A_pred_t = tape.gradient(A_pred, t)
-            A_pred_tt = tape.gradient(A_pred_t, t)
 
-        # Free up resources
-        del tape
+        # Calculate second order derivative outside the first tape context
+        with tf.GradientTape() as tape2:
+            tape2.watch(t)
+            # Recompute A_pred_t if necessary or ensure it's derived correctly
+            A_pred_t = tape.gradient(A_pred, t)
+            A_pred_tt = tape2.gradient(A_pred_t, t)
 
-        # The NLSE, including the loss term
+        # Now proceed with your loss calculation
         nlse_residual = A_pred_z + (1j * beta_2 / 2) * A_pred_tt - alpha * A_pred + 1j * gamma * tf.square(
             tf.abs(A_pred)) * A_pred
         nlse_loss_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual)))
@@ -49,7 +50,7 @@ def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
 
     def composite_loss(y_true, A_pred):
         # Split the inputs and outputs
-        A_true_real, A_true_imag = tf.split(y_true, 2, axis=-1)
+        A_true_real, A_true_imag, z, t = tf.split(y_true, [1, 1, 1, 1], axis=-1)
         A_pred_real, A_pred_imag = tf.split(A_pred, 2, axis=-1)
 
         # Convert to complex number
@@ -60,8 +61,6 @@ def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
         prediction_error = tf.reduce_mean(tf.square(tf.abs(A_pred_complex - A_true)))
 
         # Compute the NLSE loss
-        z = tf.convert_to_tensor(input_train[:, 0], dtype=tf.float32)
-        t = tf.convert_to_tensor(input_train[:, 1], dtype=tf.float32)
         physics_loss = nlse_loss(z, t, A_pred_complex)
 
         # Combine the prediction error with the physics-informed loss

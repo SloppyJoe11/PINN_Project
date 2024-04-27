@@ -27,9 +27,6 @@ alpha = 0.046 / 1000  # Convert from dB/km if needed, else use direct 1/m
 Z, T, A = generate_training_data(gaussian_pulse, fiber_length,
                                  num_steps, dt, dz, beta_2, gamma, alpha)
 
-# Call the plotting function with the data
-# plot_results(Z, T, A)
-
 
 # Assume Z and T are 1D NumPy arrays from the generate_training_data function
 # Z is of shape (num_z_steps,) and T is of shape (num_t_steps, )
@@ -50,12 +47,8 @@ output_data = np.stack((output_data.real, output_data.imag), axis=-1)
 # Normalize the input and output data
 standardized_input_data, standardized_output_data, standardization_params = standardize_data(input_data, output_data)
 
-# Create the loss function
-loss_function = create_physics_informed_loss(pinn_model, beta_2, gamma, alpha)
-
-# Compile the model with the custom loss function
-pinn_model.compile(optimizer='adam', loss=loss_function)
-
+# Concatenating the corresponding z and t of A(z,t) for later nlse loss
+standardized_output_data = np.concatenate((standardized_output_data, input_data), axis=-1)
 
 # Split the dataset into training and (validation + test)
 input_train, input_val_test, output_train, output_val_test = train_test_split(
@@ -65,13 +58,20 @@ input_train, input_val_test, output_train, output_val_test = train_test_split(
     random_state=42  # Seed for reproducibility
 )
 
-# Split the (validation + test) into validation and test sets
+# Further split for validation and test sets
 input_val, input_test, output_val, output_test = train_test_split(
     input_val_test,
     output_val_test,
-    test_size=0.5,  # Split the remaining 30% into two halves: 15% for validation and 15% for testing
+    test_size=0.5,  # Half of the 30% into validation and test
     random_state=42
 )
+
+
+# Create the loss function
+loss_function = create_physics_informed_loss(pinn_model, beta_2, gamma, alpha)
+
+# Compile the model with the custom loss function
+pinn_model.compile(optimizer='adam', loss=loss_function)
 
 # Define a callback for early stopping to prevent overfitting
 early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=50, restore_best_weights=True)
