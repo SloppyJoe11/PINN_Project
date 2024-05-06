@@ -83,23 +83,9 @@ history = pinn_model.fit(
     validation_data=(input_val, output_val),
     epochs=1000,  # You can adjust this
     batch_size=32,  # And this, according to your dataset and resource capability
-    callbacks=[early_stopping_callback]
-)
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('Model loss')
-plt.ylabel('Loss')
-plt.xlabel('Epoch')
-plt.legend(['Train', 'Validation'], loc='upper right')
-plt.show()
-plt.plot(history.history['acc'])
-plt.plot(history.history['val_acc'])
-plt.title('Model accuracy')
-plt.ylabel('Accuracy')
-plt.xlabel('Epoch')
-plt.legend(['Train', 'Validation'], loc='upper right')
-plt.show()
+    callbacks=[early_stopping_callback])
 
+plot_history(history)
 
 # Evaluate the model on the test set
 test_loss = pinn_model.evaluate(input_test, output_test)
