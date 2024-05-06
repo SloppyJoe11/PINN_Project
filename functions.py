@@ -75,7 +75,7 @@ def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
 def ssfm(A0, dz, dz_steps, dt, t_steps, beta_2, gamma, alpha):
     # Discretize time and space
     z = np.arange(0, dz * dz_steps, dz)
-    t = np.arange(-t_steps * dt / 2, t_steps * dt / 2, dt)
+    t = np.arange(-t_steps * dt / 2, t_steps * dt / 2, dt)   # Maybe change starting point to 0 instead of (-t_steps * dt / 2)
 
     # Pre-compute the linear operator
     omega = 2 * np.pi * np.fft.fftfreq(t.size, dt)
