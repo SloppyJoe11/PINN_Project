@@ -48,7 +48,7 @@ def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
 
         return nlse_loss_term
 
-    def composite_loss(y_true, A_pred):
+    def composite_loss(y_true, A_pred):             # How does this function get y_true and A_pred? Needs to be checked.. what's happening behind "model.fit"
         # Split the inputs and outputs
         A_true_real, A_true_imag, z, t = tf.split(y_true, [1, 1, 1, 1], axis=-1)
         A_pred_real, A_pred_imag = tf.split(A_pred, 2, axis=-1)
@@ -69,7 +69,7 @@ def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
         return total_loss
 
     # Return the composite loss function
-    return composite_loss
+    return composite_loss                  
 
 
 def ssfm(A0, dz, dz_steps, dt, t_steps, beta_2, gamma, alpha):
