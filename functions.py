@@ -26,29 +26,38 @@ def build_pinn_model(input_shape=2, num_neurons=100, num_layers=4, output_shape=
 # Define the physics-informed loss function within the main.py, so it has access to the pinn_model
 def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
     def nlse_loss(z, t, A_pred):
-        with tf.GradientTape(persistent=True) as tape:
-            tape.watch([z, t, A_pred])  # Ensure all variables are being watched
+        # Ensure z, t, and A_pred are tensors
+        z = tf.convert_to_tensor(z, dtype=tf.float32)
+        t = tf.convert_to_tensor(t, dtype=tf.float32)
+        A_pred = tf.convert_to_tensor(A_pred, dtype=tf.complex64)
 
-            # Calculate gradients outside the inner tape context
-            # Note: Nested tape is required only if you need higher-order derivatives
+        # First-order gradients
+        with tf.GradientTape(persistent=True) as tape:
+            tape.watch([z, t])
             A_pred_z = tape.gradient(A_pred, z)
             A_pred_t = tape.gradient(A_pred, t)
 
-        # Calculate second order derivative outside the first tape context
+        # Check if first-order gradients are computed
+        if A_pred_z is None or A_pred_t is None:
+            raise ValueError("First-order gradients not computed. Check variable connectivity and differentiability.")
+
+        # Second-order gradients
         with tf.GradientTape() as tape2:
             tape2.watch(t)
-            # Recompute A_pred_t if necessary or ensure it's derived correctly
-            A_pred_t = tape.gradient(A_pred, t)
             A_pred_tt = tape2.gradient(A_pred_t, t)
 
-        # Now proceed with your loss calculation
+        # Check if second-order gradients are computed
+        if A_pred_tt is None:
+            raise ValueError("Second-order gradient not computed. Check first-order gradient computation.")
+
+        # NLSE residual
         nlse_residual = A_pred_z + (1j * beta_2 / 2) * A_pred_tt - alpha * A_pred + 1j * gamma * tf.square(
             tf.abs(A_pred)) * A_pred
         nlse_loss_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual)))
 
         return nlse_loss_term
 
-    def composite_loss(y_true, A_pred):             # How does this function get y_true and A_pred? Needs to be checked.. what's happening behind "model.fit"
+    def composite_loss(y_true, A_pred):  # How does this function get y_true and A_pred? Needs to be checked.. what's happening behind "model.fit"
         # Split the inputs and outputs
         A_true_real, A_true_imag, z, t = tf.split(y_true, [1, 1, 1, 1], axis=-1)
         A_pred_real, A_pred_imag = tf.split(A_pred, 2, axis=-1)
