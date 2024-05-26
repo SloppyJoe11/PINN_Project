@@ -1,9 +1,13 @@
+import warnings
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras import Model
 from sklearn.model_selection import train_test_split
+
+# Suppress TensorFlow warnings
+tf.get_logger().setLevel('ERROR')
 
 # Parameters for the NLSE
 beta_2 = -21.27e-27  # s^2/m
@@ -76,11 +80,9 @@ def combined_loss(y_true, y_pred):
     A_true_real, A_true_imag, z, t = tf.split(y_true, [1, 1, 1, 1], axis=-1)
     A_pred_real, A_pred_imag = tf.split(y_pred, 2, axis=-1)
 
-    # Cast to complex64 to avoid type mismatch
-    A_true = tf.complex(A_true_real, A_true_imag)
-    A_true = tf.cast(A_true, dtype=tf.complex64)
-    A_pred = tf.complex(A_pred_real, A_pred_imag)
-    A_pred = tf.cast(A_pred, dtype=tf.complex64)
+    # Combine real and imaginary parts to form complex numbers
+    A_true = tf.complex(tf.cast(A_true_real, dtype=tf.float32), tf.cast(A_true_imag, dtype=tf.float32))
+    A_pred = tf.complex(tf.cast(A_pred_real, dtype=tf.float32), tf.cast(A_pred_imag, dtype=tf.float32))
 
     # Prediction error (MSE)
     prediction_error = tf.reduce_mean(tf.square(tf.abs(A_pred - A_true)))
@@ -96,25 +98,26 @@ def combined_loss(y_true, y_pred):
 
     del tape
 
-    # Cast gradients and constants to complex64
+    # Ensure all relevant variables are complex64
     A_pred = tf.cast(A_pred, dtype=tf.complex64)
-    abs_A_pred = tf.cast(tf.square(tf.abs(A_pred)), dtype=tf.complex64)
+    abs_A_pred_squared = tf.square(tf.abs(A_pred))  # This remains real
     A_pred_z = tf.cast(A_pred_z, dtype=tf.complex64)
     A_pred_tt = tf.cast(A_pred_tt, dtype=tf.complex64)
     beta_2_complex = tf.cast(beta_2, dtype=tf.complex64)
     alpha_complex = tf.cast(alpha, dtype=tf.complex64)
     gamma_complex = tf.cast(gamma, dtype=tf.complex64)
 
-    attenuation_complex = tf.cast((alpha_complex/2) * A_pred, dtype=tf.complex64)
-    chrom_dis_complex = tf.cast((1j * beta_2_complex / 2) * A_pred_tt, dtype=tf.complex64)
-    non_lin_complex = tf.cast(1j * gamma_complex * abs_A_pred * A_pred, dtype=tf.complex64)
+    # Compute NLSE residual terms
+    attenuation_complex = alpha_complex * A_pred
+    chrom_dis_complex = (1j * beta_2_complex / 2) * A_pred_tt
+    non_lin_complex = 1j * gamma_complex * tf.cast(abs_A_pred_squared, dtype=tf.complex64) * A_pred
 
     # NLSE residual calculation
-    nlse_residual = A_pred_z + chrom_dis_complex + attenuation_complex - non_lin_complex
+    nlse_residual = A_pred_z + chrom_dis_complex - attenuation_complex + non_lin_complex
     nlse_loss_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual)))
 
     # Combine NLSE loss and prediction error
-    total_loss = prediction_error + nlse_loss_term
+    total_loss = tf.add(prediction_error, nlse_loss_term)
 
     return total_loss
 
@@ -128,11 +131,12 @@ def train_step(model, optimizer, loss_fn, x_batch, y_batch):
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
     return loss
 
+
 # Main code
 pinn_model = build_pinn_model()
 
 # Parameters for data generation
-fiber_length = 1000  # meters
+fiber_length = 100  # meters
 num_steps = 1024
 dt = 1e-4  # seconds
 dz = 0.1  # meters
@@ -173,8 +177,12 @@ input_val, input_test, output_val, output_test = train_test_split(
 optimizer = tf.keras.optimizers.Adam()
 
 # Training parameters
-epochs = 1
-batch_size = 32
+epochs = 20
+batch_size = 1024
+
+input_train = tf.cast(input_train, tf.float32)
+output_train = tf.cast(output_train, tf.float32)
+input_val = tf.cast(input_val, tf.float32)
 
 # Prepare the dataset
 train_dataset = tf.data.Dataset.from_tensor_slices((input_train, output_train)).batch(batch_size)
@@ -183,20 +191,31 @@ val_dataset = tf.data.Dataset.from_tensor_slices((input_val, output_val)).batch(
 # Custom training loop
 history = {'loss': [], 'val_loss': []}
 
+print(f"Train dataset size: {len(list(train_dataset))} batches")
+print(f"Validation dataset size: {len(list(val_dataset))} batches")
+
 for epoch in range(epochs):
     epoch_loss_avg = tf.keras.metrics.Mean()
     epoch_val_loss_avg = tf.keras.metrics.Mean()
+
+    batch_num = 1
 
     # Training loop
     for x_batch, y_batch in train_dataset:
         loss = train_step(pinn_model, optimizer, combined_loss, x_batch, y_batch)
         epoch_loss_avg.update_state(loss)
+        batch_num += 1
+        if (batch_num % 100) == 0:
+            print(f"Training batch number {batch_num}, loss: {loss:.4f}")
 
     # Validation loop
     for x_batch_val, y_batch_val in val_dataset:
         y_pred_val = pinn_model(x_batch_val, training=False)
         val_loss = combined_loss(y_batch_val, y_pred_val)
         epoch_val_loss_avg.update_state(val_loss)
+        batch_num += 1
+        if (batch_num % 100) == 0:
+            print(f"Validation batch number {batch_num}, loss: {loss:.4f}")
 
     # Record the loss and val_loss for each epoch
     history['loss'].append(epoch_loss_avg.result().numpy())
