@@ -206,7 +206,7 @@ for epoch in range(epochs):
         epoch_loss_avg.update_state(loss)
         batch_num += 1
         if (batch_num % 100) == 0:
-            print(f"Training batch number {batch_num}, loss: {loss:.4f}")
+            print(f"Training batch number {batch_num}/{len(list(train_dataset))}, loss: {loss:.4f}")
 
     # Validation loop
     for x_batch_val, y_batch_val in val_dataset:
@@ -215,7 +215,7 @@ for epoch in range(epochs):
         epoch_val_loss_avg.update_state(val_loss)
         batch_num += 1
         if (batch_num % 100) == 0:
-            print(f"Validation batch number {batch_num}, loss: {loss:.4f}")
+            print(f"Validation batch number {batch_num}/{len(list(val_dataset))}, loss: {loss:.4f}")
 
     # Record the loss and val_loss for each epoch
     history['loss'].append(epoch_loss_avg.result().numpy())
