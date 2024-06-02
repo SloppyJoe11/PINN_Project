@@ -187,12 +187,14 @@ input_val = tf.cast(input_val, tf.float32)
 # Prepare the dataset
 train_dataset = tf.data.Dataset.from_tensor_slices((input_train, output_train)).batch(batch_size)
 val_dataset = tf.data.Dataset.from_tensor_slices((input_val, output_val)).batch(batch_size)
+test_dataset = tf.data.Dataset.from_tensor_slices((input_test, output_test)).batch(batch_size)
 
 # Custom training loop
 history = {'loss': [], 'val_loss': []}
 
 print(f"Train dataset size: {len(list(train_dataset))} batches")
 print(f"Validation dataset size: {len(list(val_dataset))} batches")
+print(f"Test dataset size: {len(list(test_dataset))} batches")
 
 for epoch in range(epochs):
     epoch_loss_avg = tf.keras.metrics.Mean()
@@ -207,7 +209,7 @@ for epoch in range(epochs):
         epoch_loss_avg.update_state(loss)
         training_batch_num += 1
         if (training_batch_num % 100) == 0:
-            print(f"Training batch number {training_batch_num}/{len(list(train_dataset))}, loss: {loss:.4f}")
+            print(f"Training batch number {training_batch_num}/{len(list(train_dataset))}, Training loss: {loss:.4f}")
 
     # Validation loop
     for x_batch_val, y_batch_val in val_dataset:
@@ -216,7 +218,7 @@ for epoch in range(epochs):
         epoch_val_loss_avg.update_state(val_loss)
         val_batch_num += 1
         if (val_batch_num % 50) == 0:
-            print(f"Validation batch number {val_batch_num}/{len(list(val_dataset))}, loss: {val_loss:.4f}")
+            print(f"Validation batch number {val_batch_num}/{len(list(val_dataset))}, Validation loss: {val_loss:.4f}")
 
     # Record the loss and val_loss for each epoch
     history['loss'].append(epoch_loss_avg.result().numpy())
@@ -232,7 +234,7 @@ for epoch in range(epochs):
 plot_history(history)
 
 # Evaluate the model on the test set
-test_dataset = tf.data.Dataset.from_tensor_slices((input_test, output_test)).batch(batch_size)
+
 test_loss_avg = tf.keras.metrics.Mean()
 
 for x_batch_test, y_batch_test in test_dataset:
