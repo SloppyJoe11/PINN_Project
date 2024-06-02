@@ -113,7 +113,7 @@ def combined_loss(y_true, y_pred):
     non_lin_complex = 1j * gamma_complex * tf.cast(abs_A_pred_squared, dtype=tf.complex64) * A_pred
 
     # NLSE residual calculation
-    nlse_residual = A_pred_z + chrom_dis_complex - attenuation_complex + non_lin_complex
+    nlse_residual = A_pred_z + chrom_dis_complex + attenuation_complex - non_lin_complex
     nlse_loss_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual)))
 
     # Combine NLSE loss and prediction error
@@ -198,24 +198,25 @@ for epoch in range(epochs):
     epoch_loss_avg = tf.keras.metrics.Mean()
     epoch_val_loss_avg = tf.keras.metrics.Mean()
 
-    batch_num = 1
+    training_batch_num = 1
+    val_batch_num = 1
 
     # Training loop
     for x_batch, y_batch in train_dataset:
         loss = train_step(pinn_model, optimizer, combined_loss, x_batch, y_batch)
         epoch_loss_avg.update_state(loss)
-        batch_num += 1
-        if (batch_num % 100) == 0:
-            print(f"Training batch number {batch_num}/{len(list(train_dataset))}, loss: {loss:.4f}")
+        training_batch_num += 1
+        if (training_batch_num % 100) == 0:
+            print(f"Training batch number {training_batch_num}/{len(list(train_dataset))}, loss: {loss:.4f}")
 
     # Validation loop
     for x_batch_val, y_batch_val in val_dataset:
         y_pred_val = pinn_model(x_batch_val, training=False)
         val_loss = combined_loss(y_batch_val, y_pred_val)
         epoch_val_loss_avg.update_state(val_loss)
-        batch_num += 1
-        if (batch_num % 100) == 0:
-            print(f"Validation batch number {batch_num}/{len(list(val_dataset))}, loss: {loss:.4f}")
+        val_batch_num += 1
+        if (val_batch_num % 50) == 0:
+            print(f"Validation batch number {val_batch_num}/{len(list(val_dataset))}, loss: {val_loss:.4f}")
 
     # Record the loss and val_loss for each epoch
     history['loss'].append(epoch_loss_avg.result().numpy())
