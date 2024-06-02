@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras import Model
-from sklearn.model_selection import train_test_split
+
 
 # Suppress TensorFlow warnings
 tf.get_logger().setLevel('ERROR')
@@ -35,6 +35,7 @@ def plot_history(history):
     plt.xlabel('Epoch')
     plt.legend(['Train', 'Validation'], loc='upper right')
     plt.show()
+
 
 # Combined loss function
 def combined_loss(y_true, y_pred):

@@ -6,6 +6,7 @@ beta_2 = -21.27e-27  # s^2/m
 gamma = 1.3e-3  # 1/(W*m)
 alpha = 0.046 / 1000  # Convert from dB/km if needed, else use direct 1/m
 
+
 # Generate the training data
 def generate_training_data(A0, fiber_length, num_steps, dt, dz, beta_2, gamma, alpha):
     T = np.arange(-num_steps // 2, num_steps // 2) * dt
@@ -29,6 +30,7 @@ def generate_training_data(A0, fiber_length, num_steps, dt, dz, beta_2, gamma, a
 def gaussian_pulse(T, pulse_width=1.0, peak_power=1.0):
     return np.sqrt(peak_power) * np.exp(-T**2 / (2 * pulse_width**2))
 
+
 # Normalize data
 def standardize_data(input_data, output_data):
     input_mean = input_data.mean(axis=0)
@@ -42,6 +44,7 @@ def standardize_data(input_data, output_data):
     standardized_output = (output_data - output_mean) / output_std
 
     return standardized_input, standardized_output, (input_mean, input_std, output_mean, output_std)
+
 
 # Parameters for data generation
 fiber_length = 100  # meters
