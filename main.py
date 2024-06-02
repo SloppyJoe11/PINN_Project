@@ -1,4 +1,4 @@
-import warnings
+
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -176,8 +176,26 @@ input_val, input_test, output_val, output_test = train_test_split(
 # Define optimizer
 optimizer = tf.keras.optimizers.Adam()
 
+# Load the best model parameters if available
+checkpoint_path = "best_model.weights.h5"
+try:
+    pinn_model.load_weights(checkpoint_path)
+    print("Loaded best model parameters from checkpoint.")
+except:
+    print("No checkpoint found, training from scratch.")
+
+
+# Define the ModelCheckpoint callback
+checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=checkpoint_path,
+    monitor='val_loss',
+    save_best_only=True,
+    save_weights_only=True,
+    verbose=1
+)
+
 # Training parameters
-epochs = 20
+epochs = 1
 batch_size = 1024
 
 input_train = tf.cast(input_train, tf.float32)
@@ -188,6 +206,11 @@ input_val = tf.cast(input_val, tf.float32)
 train_dataset = tf.data.Dataset.from_tensor_slices((input_train, output_train)).batch(batch_size)
 val_dataset = tf.data.Dataset.from_tensor_slices((input_val, output_val)).batch(batch_size)
 test_dataset = tf.data.Dataset.from_tensor_slices((input_test, output_test)).batch(batch_size)
+
+# Early stopping parameters
+patience = 10  # Number of epochs to wait for improvement before stopping
+best_val_loss = float('inf')
+wait = 0
 
 # Custom training loop
 history = {'loss': [], 'val_loss': []}
@@ -221,10 +244,26 @@ for epoch in range(epochs):
             print(f"Validation batch number {val_batch_num}/{len(list(val_dataset))}, Validation loss: {val_loss:.4f}")
 
     # Record the loss and val_loss for each epoch
+    train_loss_value = epoch_loss_avg.result().numpy()
+    val_loss_value = epoch_val_loss_avg.result().numpy()
     history['loss'].append(epoch_loss_avg.result().numpy())
     history['val_loss'].append(epoch_val_loss_avg.result().numpy())
 
     print(f"Epoch {epoch + 1}/{epochs}, Loss: {epoch_loss_avg.result().numpy()}, Val Loss: {epoch_val_loss_avg.result().numpy()}")
+
+    # Save the best model parameters
+    if val_loss_value < best_val_loss:
+        best_val_loss = val_loss_value
+        wait = 0  # Reset wait counter
+        pinn_model.save_weights(checkpoint_path)
+        print("Saved best model parameters.")
+    else:
+        wait += 1
+        print(f"Early stopping wait: {wait}/{patience}")
+
+        if wait >= patience:
+            print("Early stopping triggered")
+            break
 
     # Early stopping check
     if epoch > 50 and epoch_val_loss_avg.result().numpy() >= min(history['val_loss'][-50:]):
