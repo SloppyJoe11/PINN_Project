@@ -1,10 +1,18 @@
 import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+
 
 # Parameters for the NLSE
 beta_2 = -21.27e-27  # s^2/m
 gamma = 1.3e-3  # 1/(W*m)
 alpha = 0.046 / 1000  # Convert from dB/km if needed, else use direct 1/m
+
+# Parameters for data generation
+fiber_length = 100  # meters
+num_steps = 1024
+dt = 1e-3  # seconds
+dz = 1  # meters
 
 
 # Generate the training data
@@ -26,8 +34,9 @@ def generate_training_data(A0, fiber_length, num_steps, dt, dz, beta_2, gamma, a
 
     return Z, T, A
 
+
 # Define the initial pulse shape, e.g., a Gaussian pulse
-def gaussian_pulse(T, pulse_width=1.0, peak_power=1.0):
+def gaussian_pulse(T, pulse_width=0.05, peak_power=1.0):
     return np.sqrt(peak_power) * np.exp(-T**2 / (2 * pulse_width**2))
 
 
@@ -46,11 +55,17 @@ def standardize_data(input_data, output_data):
     return standardized_input, standardized_output, (input_mean, input_std, output_mean, output_std)
 
 
-# Parameters for data generation
-fiber_length = 100  # meters
-num_steps = 1024
-dt = 1e-4  # seconds
-dz = 0.1  # meters
+def plot_3d(z, t, a):
+    Z, T = np.meshgrid(z, t)
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot_surface(T, Z, np.abs(a.T), cmap='viridis')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Distance')
+    ax.set_zlabel('Amplitude')
+    ax.set_title('Pulse Propagation in Fiber Optic')
+    plt.show()
+
 
 # Generate the training data
 Z, T, A = generate_training_data(gaussian_pulse, fiber_length, num_steps, dt, dz, beta_2, gamma, alpha)
@@ -89,3 +104,5 @@ np.savez('processed_training_data.npz',
          input_val=input_val, output_val=output_val,
          input_test=input_test, output_test=output_test)
 print("Processed training data saved to 'processed_training_data.npz'")
+
+
