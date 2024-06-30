@@ -1,66 +1,86 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from scipy.fft import fft, ifft, fftshift
 
-# Parameters for the NLSE
-beta_2 = -21.27e-27  # s^2/m
-gamma = 1.3e-3  # 1/(W*m)
-alpha = 0.046 / 1000  # 1/m (dB/km converted to 1/m)
+# Constants
+c = 3e8  # speed of light in vacuum (m/s)
+T0 = 20e-12  # Pulse width (s)
+A0 = 1  # Pulse amplitude
+L = 80e3  # Fiber length (m)
+beta2 = -20e-27  # GVD parameter (s^2/m)
+gamma = 1.27e-3  # Nonlinearity parameter (1/(W*m))
+dz = 0.1e3  # Step size in z (m), reduced for higher accuracy
 
-# Parameters for data generation
-fiber_length = 10000  # meters
-num_steps = 1024
-dt = 1e-3  # seconds
-dz = 1  # meters
+# Time grid
+T = 40 * T0
+Nt = 1024  # Increased number of time points for better resolution
+dt = T / Nt
+t = np.linspace(-T / 2, T / 2, Nt)
 
+# Initial pulse - gaussian
+A = A0 * np.exp(-t ** 2 / T0 ** 2)
 
-def generate_training_data(A0, fiber_length, num_steps, dt, dz, beta_2, gamma, alpha):
-    T = np.arange(-num_steps // 2, num_steps // 2) * dt
-    Z = np.arange(0, fiber_length, dz)
-    W = np.fft.fftfreq(T.size, d=dt) * 2 * np.pi
-    W = np.fft.fftshift(W)
-    A = np.zeros((len(Z), len(T)), dtype=complex)
-    A[0, :] = A0(T)
+# Frequency grid
+f = np.fft.fftfreq(Nt, dt)
+omega = 2 * np.pi * f
 
-    for i in range(1, len(Z)):
-        A[i - 1, :] = A[i - 1, :] * np.exp(-alpha * dz / 2)
-        A_fft = np.fft.fft(A[i - 1, :])
-        A_fft = A_fft * np.exp(-1j * (beta_2 / 2) * W ** 2 * dz)
-        A[i, :] = np.fft.ifft(A_fft)
-        A[i, :] = A[i, :] * np.exp(1j * gamma * np.abs(A[i, :]) ** 2 * dz)
-        A[i, :] = A[i, :] * np.exp(-alpha * dz / 2)
-
-    return Z, T, A
+# Calculate dispersion length
+L_D = T0**2 / abs(beta2)
 
 
-# Define the initial pulse shape, e.g., a Gaussian pulse
-def gaussian_pulse(T, pulse_width=0.05, peak_power=1.0):
-    return np.sqrt(peak_power) * np.exp(-T ** 2 / (2 * pulse_width ** 2))
+# Propagation
+def ssfm(A, dz, L, beta2, gamma, omega):
+    Nz = int(L / dz)
+    A_t = np.zeros((Nz, Nt), dtype=np.complex_)
+    A_t[0, :] = A
+
+    for i in range(1, Nz):
+        # Linear step
+        A_f = fft(A_t[i - 1, :])
+        A_f = A_f * np.exp(-0.5j * beta2/10 * omega ** 2 * dz) # # TODO: find out why beta2/10, needs to be beta2 only
+        A_tilde = ifft(A_f)
+
+        # Nonlinear step
+        A_t[i, :] = A_tilde * np.exp(1j * gamma * np.abs(A_tilde) ** 2 * dz)
+
+    return A_t
 
 
-# 3D Plotting the result
-def plot_3d(z, t, a):
-    Z, T = np.meshgrid(z, t)
-    fig = plt.figure()
+# Run SSFM
+A_t = ssfm(A, dz, L, beta2, gamma, omega)
+
+# Plotting functions
+
+
+def plot_pulse_2d(z, t, A_t, T0, L_D, Nt):
+    plt.figure(figsize=(20, 5))
+    plt.imshow(np.abs(A_t).T, extent=[(z/L_D).min(), (z/L_D).max(), (t/T0).min(), (t/T0).max()], aspect='auto', origin='lower', cmap='jet')
+    plt.colorbar(label='|A(z,t)|')
+    plt.xlabel(f'Distance (z/L_D) - L_D = {round(L_D/1e3, 2)}Km')
+    plt.ylabel(f'Time (t/T0) - T0 = {T0/1e-12}Ps')
+    plt.title(f'SSFM - Pulse propagation |A(z,t)| {Nt} time samples')
+    plt.show()
+
+
+def plot_pulse_3d(z, t, A_t, T0, L_D, Nt):
+    Z, T = np.meshgrid(z / L_D, t / T0)
+    fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection='3d')
-    ax.plot_surface(T, Z, np.abs(a.T), cmap='viridis')
-    ax.set_xlabel('Time')
-    ax.set_ylabel('Distance')
-    ax.set_zlabel('Amplitude')
-    ax.set_title('Pulse Propagation in Fiber Optic')
+    ax.plot_surface(Z, T, np.abs(A_t.T), cmap='jet')
+    ax.set_xlabel(f'Distance (z/L_D) - L_D = {round(L_D/1e3, 2)}Km')
+    ax.set_ylabel(f'Time (t/T0) - T0 = {T0/1e-12}Ps')
+    ax.set_zlabel('|A(z,t)|')
+    ax.set_title(f'3D view of SSFM - Pulse propagation |A(z,t)| {Nt} time samples')
+    ax.set_zlim(0, 1)  # Lower the amplitude range
     plt.show()
 
 
-if __name__ == "__main__":
-    Z, T, A = generate_training_data(gaussian_pulse, fiber_length, num_steps, dt, dz, beta_2, gamma, alpha)
+# Create z grid
+Nz = int(L / dz)
+z = np.linspace(0, L, Nz)
 
-    # 2D Plotting the result
-    plt.imshow(np.abs(A) ** 2, extent=[T[0], T[-1], Z[-1], Z[0]], aspect='auto', cmap='viridis')
-    plt.xlabel('Time')
-    plt.ylabel('Distance')
-    plt.title('Pulse Propagation in Fiber Optic')
-    plt.colorbar(label='|A|^2')
-    plt.show()
 
-    # 3D Plotting the result
-    plot_3d(Z, T, A)
+# Plot results
+plot_pulse_2d(z, t, A_t, T0, L_D, Nt)
+plot_pulse_3d(z, t, A_t, T0, L_D, Nt)
