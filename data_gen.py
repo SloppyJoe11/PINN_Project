@@ -9,8 +9,8 @@ T0 = 20e-12  # Pulse width (s)
 A0 = 1  # Pulse amplitude
 L = 80e3  # Fiber length (m)
 alpha = 0  # Attenuation coefficient in m^-1
-beta2 = -20e-28  # GVD parameter (s^2/m)  # TODO: find out why -27 doesnt work well
-gamma = 1.27e-3  # Nonlinearity parameter (1/(W*m))
+beta2 = -20e-27  # GVD parameter (s^2/m)  # TODO: find out why -27 doesnt work well
+gamma = 1.27e-3  # Non-linearity parameter (1/(W*m))
 dz = 0.1e3  # Step size in z (m), reduced for higher accuracy
 
 # Time grid
@@ -27,7 +27,7 @@ f = np.fft.fftfreq(Nt, dt)
 omega = 2 * np.pi * f
 
 # Calculate dispersion length
-L_D = T0**2 / abs(beta2*10)  # TODO: after beta2 e-28 fix, we can delete multiply by 10
+L_D = T0**2 / abs(beta2)   # TODO: after fixing e-28, delete *10
 
 
 # Generate the training data
@@ -153,6 +153,8 @@ np.savez('processed_training_data.npz',
          input_test=input_test,                 output_test=output_test,
          A0_train=A0_train,                     A0_val=A0_val,
          A_boundary_train=A_boundary_train,     A_boundary_val=A_boundary_val,
+         standardized_input_data=standardized_input_data,
+         Z_grid=Z_grid,                         T_grid=T_grid,
          standardization_params=standardization_params)
 
 print("Processed training data saved to 'processed_training_data.npz'")
