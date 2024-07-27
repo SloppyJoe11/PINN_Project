@@ -44,7 +44,7 @@ beta_2 = -20  # ps^2/km
 gamma = 1.27e-3  # 1/(mW*km)
 alpha = 0  # Convert from dB/km if needed, else use direct 1/m
 parameters = {'alpha': 0, 'beta_2': -20, 'gamma': 1.27e-3,
-              'T0': 20, 'Z': 80, 'T': 800, 'Nt': 512, 'dt': 800/512, 'dz': 0.1}
+              'T0': 20, 'L': 80, 'T': 800, 'Nt': 512, 'dt': 800/512, 'dz': 0.1}
 
 
 # ------------------------- Data preparation --------------------------- #
@@ -133,7 +133,7 @@ for epoch in range(epochs):
 
     # Training loop
     for train_batch, A0_batch, A_boundary_batch in combined_train_dataset:
-        loss = train_step(pinn_model, optimizer, train_loss, train_batch, A0_batch, A_boundary_batch,
+        loss = train_step(pinn_model, optimizer, train_batch, A0_batch, A_boundary_batch,parameters,
                           epoch_nlse_loss_avg, epoch_A0_loss_avg, epoch_Ab_loss_avg)
         epoch_loss_avg.update_state(loss)
 

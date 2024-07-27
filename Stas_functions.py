@@ -44,7 +44,7 @@ def plot_history(history):
 # Train loss function
 def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nlse_avg, a0_avg, ab_avg):
 
-    nlse_loss_term = nlse_residual(fiber_batch, pinn_model, parameters['alpha'], parameters['beta_2'], parameters['gamma'])
+    nlse_loss_term = nlse_residual(fiber_batch, pinn_model, parameters)
     nlse_avg.update_state(nlse_loss_term)
 
     A0_mse_term = initial_condition_loss(A0_batch, pinn_model)
@@ -56,8 +56,11 @@ def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nl
     return nlse_loss_term + A0_mse_term + Ab_mse_term
 
 
-def nlse_residual(fiber_batch, pinn_model, alpha, beta_2, gamma):
+def nlse_residual(fiber_batch, pinn_model, parameters):
     z, t, a_real, a_image = tf.split(fiber_batch, [1, 1, 1, 1], axis=-1)
+    alpha = parameters['alpha']
+    beta_2 = parameters['beta_2']
+    gamma = parameters['gamma']
 
     with tf.GradientTape(persistent=True) as tape2:
         tape2.watch([z, t])
@@ -134,7 +137,7 @@ def train_step(model, optimizer, input_train_batch, A0_batch, boundary_batch, pa
 def plot_model_pulse_propagation(model, standardized_input, standardization_params, parameters):
     # Constants
     T0 = parameters['T0']  # Initial pulse width (ps)
-    L = parameters['T0']  # Fiber length (km)
+    L = parameters['L']  # Fiber length (km)
     dz = parameters['dz']  # Step size in z (km), reduced for higher accuracy
     T = parameters['T']  # Time window (ps)
     Nt = parameters['Nt']  # Increased number of time points for better resolution
