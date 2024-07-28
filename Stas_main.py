@@ -30,20 +30,20 @@ print('Data loaded!!!')
 pinn_model = build_pinn_model()  # Create the network
 
 # Training parameters
-epochs = 40
+epochs = 3
 batch_size = 128
 
 # Early stopping parameters
-patience = 10  # Number of epochs to wait for improvement before stopping
+patience = 40  # Number of epochs to wait for improvement before stopping
 best_val_loss = float('inf')
 wait = 0
 
 
 # Parameters for the NLSE
 beta_2 = -20  # ps^2/km
-gamma = 1.27e-3  # 1/(mW*km)
+gamma = 1.27  # 1/(W*km)
 alpha = 0  # Convert from dB/km if needed, else use direct 1/m
-parameters = {'alpha': 0, 'beta_2': -20, 'gamma': 1.27e-3,
+parameters = {'epochs': epochs, 'alpha': alpha, 'beta_2': beta_2, 'gamma': gamma,
               'T0': 20, 'L': 80, 'T': 800, 'Nt': 512, 'dt': 800/512, 'dz': 0.1}
 
 
@@ -84,20 +84,19 @@ else:
 # Define the ModelCheckpoint callback
 checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath=checkpoint_path, monitor='val_loss',
                                                          save_best_only=True, save_weights_only=True, verbose=1)
-
-# ---------------------------- Pre-Train model test ------------------------------- #
-# Custom training loop
 history = {'loss': [], 'val_loss': [], 'test_loss': [], 'nlse_loss': [], 'A0_loss': [], 'Ab_loss': []}
 
+# ---------------------------- Pre-Train model test ------------------------------- #
+
 test_loss_avg_start = tf.keras.metrics.Mean()
-
-for test_batch in test_dataset:
-    test_loss_term = test_loss(test_batch, pinn_model)
-    test_loss_avg_start.update_state(test_loss_term)
-print(f'Test loss before training: {test_loss_avg_start.result().numpy()}')
-
-
-plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
+#
+# for test_batch in test_dataset:
+#     test_loss_term = test_loss(test_batch, pinn_model)
+#     test_loss_avg_start.update_state(test_loss_term)
+# print(f'Test loss before training: {test_loss_avg_start.result().numpy()}')
+#
+#
+# plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
 
 
 # ----------------------------- Train Loop ----------------------------#
@@ -131,9 +130,9 @@ for epoch in range(epochs):
 
     total_batches = len(list(train_dataset))
 
-    # Training loop
+    # ----------------------------------- Training loop ---------------------------- #
     for train_batch, A0_batch, A_boundary_batch in combined_train_dataset:
-        loss = train_step(pinn_model, optimizer, train_batch, A0_batch, A_boundary_batch,parameters,
+        loss = train_step(pinn_model, optimizer, train_batch, A0_batch, A_boundary_batch, parameters,
                           epoch_nlse_loss_avg, epoch_A0_loss_avg, epoch_Ab_loss_avg)
         epoch_loss_avg.update_state(loss)
 
@@ -147,7 +146,8 @@ for epoch in range(epochs):
 
     # Validation loop
     for val_batch, A0_batch, A_boundary_batch in combined_validation_dataset:
-        val_loss = train_loss(val_batch, A0_batch, A_boundary_batch)
+        val_loss = train_loss(val_batch, A0_batch, A_boundary_batch, pinn_model, parameters,
+                              epoch_nlse_loss_avg, epoch_A0_loss_avg, epoch_Ab_loss_avg)
         epoch_val_loss_avg.update_state(val_loss)
         val_batch_num += 1
 
@@ -195,7 +195,7 @@ for epoch in range(epochs):
     epoch_duration = end_time - start_time  # Calculate duration
     print(f"Epoch {epoch + 1} completed in {epoch_duration:.2f} seconds")
 
-    plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
+    # plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
 
 np.savez('history.npz', history=history)
 print('Saved history to history.npz')
@@ -204,18 +204,19 @@ print('Saved history to history.npz')
 history = np.load('history.npz', allow_pickle=True)
 history = history['history'].item()
 
-plot_history(history)
+plot_history(history, parameters)
 
 # Evaluate the model on the test set
 
 test_loss_avg = tf.keras.metrics.Mean()
 
 for test_batch in test_dataset:
-    test_loss_term = test_loss(test_batch)
+    test_loss_term = test_loss(test_batch, pinn_model,)
     test_loss_avg.update_state(test_loss_term)
 
 print(f"The final test loss is: {test_loss_avg.result().numpy()},"
       f" the starting test loss is: {test_loss_avg_start.result().numpy()}")
 
 # Function to calculate MSE between A from PINN and A from SSFM and plot it as a heatmap
-plot_mse_heatmap(pinn_model, standardized_input_data, standardized_output_data, z_grid, t_grid, standardization_params)
+plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
+plot_mse_heatmap(pinn_model, standardized_input_data, standardized_output_data, z_grid, t_grid, standardization_params, parameters)

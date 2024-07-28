@@ -23,24 +23,6 @@ def build_pinn_model(input_shape=2, num_neurons=100, num_layers=4, output_shape=
     model = Model(inputs=inputs, outputs=outputs)
     return model
 
-
-# Plot training history
-def plot_history(history):
-    plt.plot(history['loss'], label='Train')
-    plt.plot(history['val_loss'], label='Validation')
-    plt.plot(history['test_loss'], label='Test')
-    plt.plot(history['nlse_loss'], label='NLSE')
-    plt.plot(history['A0_loss'], label='A0')
-    plt.plot(history['Ab_loss'], label='Ab')
-    plt.yscale('log')
-    plt.title('Model loss')
-    plt.ylabel('Loss')
-    plt.xlabel('Epoch')
-    plt.legend(loc='upper right')
-    plt.savefig('History plot')
-    plt.close()
-
-
 # Train loss function
 def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nlse_avg, a0_avg, ab_avg):
 
@@ -98,6 +80,7 @@ def initial_condition_loss(A0_batch, pinn_model):
     A0_pred_real, A0_pred_image = tf.split(A0_pred, 2, axis=-1)
     A0_pred_complex = tf.complex(A0_pred_real, A0_pred_image)
     A0_mse = tf.reduce_mean(tf.square(tf.abs(A0_pred_complex - A0_ssfm)))
+
     return A0_mse
 
 
@@ -108,6 +91,7 @@ def boundary_condition_loss(boundary_batch, pinn_model):
     Ab_pred_real, Ab_pred_imag = tf.split(Ab_pred, 2, axis=-1)
     Ab_pred_complex = tf.complex(Ab_pred_real, Ab_pred_imag)
     Ab_mse = tf.reduce_mean(tf.square(tf.abs(Ab_pred_complex - Ab_ssfm)))
+
     return Ab_mse
 
 
@@ -142,7 +126,9 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
     T = parameters['T']  # Time window (ps)
     Nt = parameters['Nt']  # Increased number of time points for better resolution
     dt = parameters['dt']  # Step size in t (ps)
+    alpha = parameters['alpha']
     beta_2 = parameters['beta_2']
+    gamma = parameters['gamma']
 
     t = np.linspace(-T / 2, T / 2, Nt)
     L_D = T0 ** 2 / abs(beta_2)
@@ -161,6 +147,11 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
 
     A_t = predictions_complex.reshape(len(z), len(t))
 
+    os.makedirs('plots', exist_ok=True)
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_dir = os.path.join('plots', params_str)
+    os.makedirs(params_dir, exist_ok=True)
+
     # Plot the results
     plt.figure(figsize=(20, 5))
     plt.imshow(np.abs(A_t).T, extent=[(z / L_D).min(), (z / L_D).max(), (t / T0).min(), (t / T0).max()], aspect='auto',
@@ -168,20 +159,31 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
     plt.colorbar(label='|A(z,t)|')
     plt.xlabel(f'Distance (z) | L_D = {round(L_D, 2)}Km')
     plt.ylabel(f'Time (t) | T0 = {T0}Ps')
-    plt.title('Pulse propagation using trained model |A(z,t)|')
-    plt.savefig('PINN pulse propagation')
+    plt.title(f'Pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta_2}, gamma={gamma}')
+    plt.savefig(os.path.join(params_dir, 'PINN pulse propagation'))
     plt.close()
 
     # 3D plot
     Z, T = np.meshgrid(z / L_D, t / T0)
-    fig = plt.figure(figsize=(12, 8))
+    fig = plt.figure(figsize=(24, 16))
     ax = fig.add_subplot(111, projection='3d')
     ax.plot_surface(Z, T, np.abs(A_t.T), cmap='jet')
     ax.set_xlabel(f'Distance (z) | L_D = {round(L_D, 2)}Km')
     ax.set_ylabel(f'Time (t) | T0 = {T0}Ps')
     ax.set_zlabel('|A(z,t)|')
-    ax.set_title('3D view of pulse propagation using trained model |A(z,t)|')
-    plt.savefig('PINN pulse propagation 3D')
+    ax.set_title(f'3D view of pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta_2}, gamma={gamma}')
+    plt.savefig(os.path.join(params_dir, 'PINN pulse propagation 3D'))
+    plt.close()
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(t, np.abs(A_t[0, :]), label='Initial Pulse (A0)')
+    plt.plot(t, np.abs(A_t[-1, :]), label='Final Pulse (A final)')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Amplitude')
+    plt.title('Initial and Final Pulse Comparison')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(params_dir, 'Initial and Final Pulse Comparison'))
     plt.close()
 
 
@@ -200,6 +202,7 @@ def plot_ssfm_pulse_propagation(standardization_params, standardized_output_data
     xmin, xmax = Z_grid.min(), Z_grid.max()
     ymin, ymax = T_grid.min(), T_grid.max()
 
+
     # Plot the results
     plt.figure(figsize=(20, 5))
     # Pass the calculated extent values
@@ -213,7 +216,7 @@ def plot_ssfm_pulse_propagation(standardization_params, standardized_output_data
     plt.close()
 
 
-def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid, t_grid, standardization_params):
+def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid, t_grid, standardization_params, parameters):
     # Get predictions from the model
     predictions = pinn_model.predict(standardized_input)
 
@@ -240,6 +243,11 @@ def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid
     # Calculate MSE
     mse = np.square(np.abs(predictions_complex - ssfm_complex))
 
+    os.makedirs('plots', exist_ok=True)
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_dir = os.path.join('plots', params_str)
+    os.makedirs(params_dir, exist_ok=True)
+
     # Plot the MSE heatmap
     plt.figure(figsize=(20, 5))
     # Correct the extent parameter to include all four bounds
@@ -249,5 +257,26 @@ def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid
     plt.xlabel('Distance (km)')
     plt.ylabel('Time (ps)')
     plt.title('MSE between A from PINN and A from SSFM')
-    plt.savefig('MSE between A from PINN and A from SSFM')
+    plt.savefig(os.path.join(params_dir, 'MSE between A from PINN and A from SSFM'))
+    plt.close()
+
+
+def plot_history(history, parameters):
+    os.makedirs('plots', exist_ok=True)
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_dir = os.path.join('plots', params_str)
+    os.makedirs(params_dir, exist_ok=True)
+
+    plt.plot(history['loss'], label='Train')
+    plt.plot(history['val_loss'], label='Validation')
+    plt.plot(history['test_loss'], label='Test')
+    plt.plot(history['nlse_loss'], label='NLSE')
+    plt.plot(history['A0_loss'], label='A0')
+    plt.plot(history['Ab_loss'], label='Ab')
+    plt.yscale('log')
+    plt.title('Model loss')
+    plt.ylabel('Loss')
+    plt.xlabel('Epoch')
+    plt.legend(loc='upper right')
+    plt.savefig(os.path.join(params_dir, 'History plot'))
     plt.close()

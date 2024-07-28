@@ -8,13 +8,14 @@ import matplotlib
 matplotlib.use('Agg')
 
 # Constants
-T0 = 20  # Pulse width (s)
-A0 = 1  # Pulse amplitude
-L = 80  # Fiber length (m)
+T0 = 20  # Pulse width (ps)
+P0 = 1e-3  # Pulse Power (W)
+A0 = np.sqrt(P0)  # Pulse Amplitude (W)
+L = 80  # Fiber length (km)
 alpha = 0  # Attenuation coefficient in m^-1
-beta2 = -20  # GVD parameter (s^2/m)  # TODO: find out why -27 doesnt work well
-gamma = 1.27e-3  # Non-linearity parameter (1/(W*m))
-dz = 0.1  # Step size in z (m), reduced for higher accuracy
+beta2 = -20  # GVD parameter ((ps)^2/km)
+gamma = 1.27  # Non-linearity parameter (1/(W*km))
+dz = 0.1  # Step size in z (km), reduced for higher accuracy
 
 # Time grid
 T = 40 * T0
@@ -31,6 +32,9 @@ omega = 2 * np.pi * f
 
 # Calculate dispersion length
 L_D = T0**2 / abs(beta2)   # TODO: after fixing e-28, delete *10
+L_n = 1 / (gamma*P0)
+
+print(f'L_n = {L_n}, L_D = {L_D}')
 
 
 # Generate the training data
@@ -88,7 +92,7 @@ def plot_pulse_3d(z, t, A_t, T0, L_D, Nt):
     ax.set_title(f'3D view of SSFM - Pulse propagation |A(z,t)| {Nt} time samples, '
                  f'alpha = {alpha}, beta = {beta2}, gamma = {gamma}')
     ax.set_zlim(0, 1)  # Lower the amplitude range
-    plt.savefig('pulse_3d.png')
+    plt.savefig('SSFM pulse 3d.png')
     plt.close()
 
 
@@ -100,7 +104,20 @@ def plot_pulse_2d(z, t, A_t, T0, L_D, Nt):
     plt.ylabel(f'Time (T0) - T0 = {T0}Ps')
     plt.title(f'SSFM - Pulse propagation |A(z,t)| {Nt} time samples, '
               f'alpha = {alpha}, beta = {beta2}, gamma = {gamma}')
-    plt.savefig('pulse_2d.png')
+    plt.savefig('SSFM pulse 2d.png')
+    plt.close()
+
+
+def plot_initial_final_pulse(A_t, t):
+    plt.figure(figsize=(20, 5))
+    plt.plot(t, np.abs(A_t[0, :]), label='Initial Pulse (A0)')
+    plt.plot(t, np.abs(A_t[-1, :]), label='Final Pulse (A final)')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Amplitude')
+    plt.title('Initial and Final Pulse Comparison')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig('Initial and Final Pulse Comparison')
     plt.close()
 
 
@@ -113,7 +130,7 @@ T_ = np.linspace(-T / 2, T / 2, Nt)
 # Plot results
 plot_pulse_2d(Z, T_, A, T0, L_D, Nt)
 plot_pulse_3d(Z, T_, A, T0, L_D, Nt)
-
+plot_initial_final_pulse(A, t)
 
 # Create a 2D grid of Z and T values
 Z_grid, T_grid = np.meshgrid(Z, T_, indexing='ij')
