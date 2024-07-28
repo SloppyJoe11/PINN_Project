@@ -1,217 +1,282 @@
+import os
+import sys
+import time
+import warnings
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras import Model
 
+# Set the backend for Matplotlib to 'Agg'
+import matplotlib
+matplotlib.use('Agg')
 
+
+# Build the model
 def build_pinn_model(input_shape=2, num_neurons=100, num_layers=4, output_shape=2):
-    # Input layer: temporal-spatial coordinates (t, z)
     inputs = Input(shape=(input_shape,))
-
-    # Hidden layers: using 'num_layers' dense layers with 'num_neurons' each and tanh activation
     x = Dense(num_neurons, activation='tanh')(inputs)
     for _ in range(num_layers - 1):
         x = Dense(num_neurons, activation='tanh')(x)
-
-    # Output layer: real and imaginary parts of the complex envelope A
     outputs = Dense(output_shape, activation=None)(x)
-
-    # Construct the model
     model = Model(inputs=inputs, outputs=outputs)
-
     return model
 
+# Train loss function
+def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nlse_avg, a0_avg, ab_avg):
 
-# Define the physics-informed loss function within the main.py, so it has access to the pinn_model
-def create_physics_informed_loss(pinn_model, beta_2, gamma, alpha):
-    def nlse_loss(z, t, A_pred):
-        with tf.GradientTape(persistent=True) as tape:
-            tape.watch([z, t, A_pred])  # Ensure all variables are being watched
+    nlse_loss_term = nlse_residual(fiber_batch, pinn_model, parameters)
+    nlse_avg.update_state(nlse_loss_term)
 
-            # Calculate gradients outside the inner tape context
-            # Note: Nested tape is required only if you need higher-order derivatives
-            A_pred_z = tape.gradient(A_pred, z)
-            A_pred_t = tape.gradient(A_pred, t)
+    A0_mse_term = initial_condition_loss(A0_batch, pinn_model)
+    a0_avg.update_state(A0_mse_term)
 
-        # Calculate second order derivative outside the first tape context
-        with tf.GradientTape() as tape2:
-            tape2.watch(t)
-            # Recompute A_pred_t if necessary or ensure it's derived correctly
-            A_pred_t = tape.gradient(A_pred, t)
-            A_pred_tt = tape2.gradient(A_pred_t, t)
+    Ab_mse_term = boundary_condition_loss(boundary_batch, pinn_model)
+    ab_avg.update_state(Ab_mse_term)
 
-        # Now proceed with your loss calculation
-        nlse_residual = A_pred_z + (1j * beta_2 / 2) * A_pred_tt - alpha * A_pred + 1j * gamma * tf.square(
-            tf.abs(A_pred)) * A_pred
-        nlse_loss_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual)))
-
-        return nlse_loss_term
-
-    def composite_loss(y_true, A_pred):             # How does this function get y_true and A_pred? Needs to be checked.. what's happening behind "model.fit"
-        # Split the inputs and outputs
-        A_true_real, A_true_imag, z, t = tf.split(y_true, [1, 1, 1, 1], axis=-1)
-        A_pred_real, A_pred_imag = tf.split(A_pred, 2, axis=-1)
-
-        # Convert to complex number
-        A_true = tf.complex(A_true_real, A_true_imag)
-        A_pred_complex = tf.complex(A_pred_real, A_pred_imag)
-
-        # Compute the prediction error
-        prediction_error = tf.reduce_mean(tf.square(tf.abs(A_pred_complex - A_true)))
-
-        # Compute the NLSE loss
-        physics_loss = nlse_loss(z, t, A_pred_complex)
-
-        # Combine the prediction error with the physics-informed loss
-        total_loss = prediction_error + physics_loss
-
-        return total_loss
-
-    # Return the composite loss function
-    return composite_loss                  
+    return nlse_loss_term + A0_mse_term + Ab_mse_term
 
 
-def ssfm(A0, dz, dz_steps, dt, t_steps, beta_2, gamma, alpha):
-    # Discretize time and space
-    z = np.arange(0, dz * dz_steps, dz)
-    t = np.arange(-t_steps * dt / 2, t_steps * dt / 2, dt)   # Maybe change starting point to 0 instead of (-t_steps * dt / 2)
+def nlse_residual(fiber_batch, pinn_model, parameters):
+    z, t, a_real, a_image = tf.split(fiber_batch, [1, 1, 1, 1], axis=-1)
+    alpha = parameters['alpha']
+    beta_2 = parameters['beta_2']
+    gamma = parameters['gamma']
 
-    # Pre-compute the linear operator
-    omega = 2 * np.pi * np.fft.fftfreq(t.size, dt)
-    linear_operator = np.exp(-0.5 * (1j * beta_2 * omega ** 2 - alpha) * dz)
+    with tf.GradientTape(persistent=True) as tape2:
+        tape2.watch([z, t])
+        a_pred = pinn_model(tf.concat([z, t], axis=-1))
+        a_pred_real, a_pred_imag = tf.split(a_pred, 2, axis=-1)
+        a_z_real = tape2.gradient(a_pred_real, z)
+        a_z_imag = tape2.gradient(a_pred_imag, z)
+        a_t_real = tape2.gradient(a_pred_real, t)
+        a_t_imag = tape2.gradient(a_pred_imag, t)
 
-    # Initialize the field
-    A = np.zeros((dz_steps, t.size), dtype=complex)
-    A[0, :] = A0(t)
+    a_pred_complex = tf.complex(a_pred_real, a_pred_imag)
+    a_z_complex = tf.cast(tf.complex(a_z_real, a_z_imag), tf.complex64)
 
-    # SSFM loop
-    for i in range(1, dz_steps):
-        # Linear step
-        A[i, :] = np.fft.ifft(np.fft.fft(A[i - 1, :]) * linear_operator)
+    a_tt_real = tape2.gradient(a_t_real, t)
+    a_tt_imag = tape2.gradient(a_t_imag, t)
+    a_tt_complex = tf.complex(a_tt_real, a_tt_imag)
 
-        # Nonlinear step
-        A[i, :] = A[i, :] * np.exp(1j * gamma * np.abs(A[i, :]) ** 2 * dz)
+    del tape2
 
-    return z, t, A
+    a_pred_abs_squared = tf.cast(tf.square(tf.abs(a_pred_complex)), tf.complex64)
+    attenuation_complex = (alpha / 2) * a_pred_complex
+    chrom_dis_complex = (1j * beta_2 / 2) * tf.cast(a_tt_complex, tf.complex64)
+    non_lin_complex = 1j * gamma * a_pred_abs_squared * a_pred_complex
 
+    nlse_residual_value = a_z_complex + chrom_dis_complex + attenuation_complex - non_lin_complex
+    nlse_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual_value)))
 
-# Define the initial pulse shape, e.g., a Gaussian pulse
-
-def gaussian_pulse(T, pulse_width=1.0, peak_power=1.0):
-    return np.sqrt(peak_power) * np.exp(-T**2 / (2 * pulse_width**2))
-
-
-def generate_training_data(A0, fiber_length, num_steps, dt, dz, beta_2, gamma, alpha):
-    T = np.arange(-num_steps // 2, num_steps // 2) * dt
-    Z = np.arange(0, fiber_length, dz)
-    W = np.fft.fftfreq(T.size, d=dt) * 2 * np.pi
-    W = np.fft.fftshift(W)  # Shift zero frequency to center
-
-    # Convert alpha from dB/km to 1/m if necessary
-    # alpha_m = alpha / (10 * 1e3 * np.log(10))
-
-    # Initial pulse in the time domain
-    A = np.zeros((len(Z), len(T)), dtype=complex)
-    A[0, :] = A0(T)
-
-    # SSFM loop
-    for i in range(1, len(Z)):
-        # Apply half the attenuation for the step
-        A[i - 1, :] = A[i - 1, :] * np.exp(-alpha * dz / 2)
-
-        # Linear step in the frequency domain
-        A_fft = np.fft.fft(A[i - 1, :])
-        A_fft = A_fft * np.exp(-1j * (beta_2 / 2) * W ** 2 * dz)
-
-        # Nonlinear step in the time domain
-        A[i, :] = np.fft.ifft(A_fft)
-        A[i, :] = A[i, :] * np.exp(1j * gamma * np.abs(A[i, :]) ** 2 * dz)
-
-        # Apply the second half of the attenuation for the step
-        A[i, :] = A[i, :] * np.exp(-alpha * dz / 2)
-
-    return Z, T, A
+    return nlse_term
 
 
-# Assuming 'A', 'Z', T are your outputs from the SSFM function
-def plot_results(Z, T, A):
-    # Selecting a specific output position for detailed plot, here at the end of the fiber
-    A_output = A[-1, :]
+def initial_condition_loss(A0_batch, pinn_model):
+    z0, t0, A0_real, A0_image = tf.split(A0_batch, [1, 1, 1, 1], axis=-1)
+    A0_ssfm = tf.cast(tf.complex(A0_real, A0_image), tf.complex64)
+    A0_pred = pinn_model(tf.concat([z0, t0], axis=1))
+    A0_pred_real, A0_pred_image = tf.split(A0_pred, 2, axis=-1)
+    A0_pred_complex = tf.complex(A0_pred_real, A0_pred_image)
+    A0_mse = tf.reduce_mean(tf.square(tf.abs(A0_pred_complex - A0_ssfm)))
 
-    # Create a figure with subplots
-    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
-
-    # Plot the intensity of the pulse at the end of the fiber
-    axs[0, 0].plot(T, np.abs(A_output)**2)
-    axs[0, 0].set_title('Output Pulse Intensity')
-    axs[0, 0].set_xlabel('Time (s)')
-    axs[0, 0].set_ylabel('Intensity |A|^2')
-
-    # Plot the phase of the pulse at the end of the fiber
-    axs[0, 1].plot(T, np.angle(A_output))
-    axs[0, 1].set_title('Output Pulse Phase')
-    axs[0, 1].set_xlabel('Time (s)')
-    axs[0, 1].set_ylabel('Phase (radians)')
-
-    # Intensity plot along the fiber
-    intensity_along_fiber = np.abs(A)**2
-    contour = axs[1, 0].contourf(T, Z, intensity_along_fiber, levels=100, cmap='hot')
-    fig.colorbar(contour, ax=axs[1, 0])
-    axs[1, 0].set_title('Intensity Along the Fiber')
-    axs[1, 0].set_xlabel('Time (s)')
-    axs[1, 0].set_ylabel('Propagation Distance (m)')
-
-    # Plot the peak power evolution along the fiber
-    peak_power = np.max(intensity_along_fiber, axis=1)
-    axs[1, 1].plot(Z, peak_power)
-    axs[1, 1].set_title('Peak Power Evolution Along the Fiber')
-    axs[1, 1].set_xlabel('Propagation Distance (m)')
-    axs[1, 1].set_ylabel('Peak Power')
-
-    plt.tight_layout()
-    plt.show()
+    return A0_mse
 
 
-def standardize_data(input_data, output_data):
-    # Calculate mean and standard deviation for input data
-    input_mean = input_data.mean(axis=0)
-    input_std = input_data.std(axis=0)
+def boundary_condition_loss(boundary_batch, pinn_model):
+    zb, tb, Ab_real, Ab_image = tf.split(boundary_batch, [1, 1, 1, 1], axis=-1)
+    Ab_ssfm = tf.cast(tf.complex(Ab_real, Ab_image), tf.complex64)
+    Ab_pred = pinn_model(tf.concat([zb, tb], axis=-1))
+    Ab_pred_real, Ab_pred_imag = tf.split(Ab_pred, 2, axis=-1)
+    Ab_pred_complex = tf.complex(Ab_pred_real, Ab_pred_imag)
+    Ab_mse = tf.reduce_mean(tf.square(tf.abs(Ab_pred_complex - Ab_ssfm)))
 
-    # Avoid division by zero in case of a constant feature
-    input_std[input_std == 0] = 1
-
-    # Standardize input data
-    standardized_input = (input_data - input_mean) / input_std
-
-    # Calculate mean and standard deviation for output data
-    output_mean = output_data.mean(axis=0)
-    output_std = output_data.std(axis=0)
-
-    # Avoid division by zero in case of a constant feature
-    output_std[output_std == 0] = 1
-
-    # Standardize output data
-    standardized_output = (output_data - output_mean) / output_std
-
-    # Return the standardized data and the parameters used for standardization
-    return standardized_input, standardized_output, (input_mean, input_std, output_mean, output_std)
+    return Ab_mse
 
 
-def plot_history(history):
-    plt.plot(history.history['loss'])
-    plt.plot(history.history['val_loss'])
+def test_loss(batch, pinn_model):
+    z_test, t_test, a_real, a_image = tf.split(batch, [1, 1, 1, 1], axis=-1)
+    a_sffm = tf.cast(tf.complex(a_real, a_image), tf.complex64)
+
+    a_pred = pinn_model(tf.concat([z_test, t_test], axis=-1))
+    a_pred_real, a_pred_imag = tf.split(a_pred, 2, axis=-1)
+    a_pred_complex = tf.complex(a_pred_real, a_pred_imag)
+
+    testing_loss = tf.reduce_mean(tf.square(tf.abs(a_pred_complex - a_sffm)))
+    return testing_loss
+
+
+# Training step function
+def train_step(model, optimizer, input_train_batch, A0_batch, boundary_batch, parameters, nlse_avg, a0_avg, ab_avg):
+    with tf.GradientTape() as tape:
+        loss = train_loss(input_train_batch, A0_batch, boundary_batch, model, parameters, nlse_avg, a0_avg, ab_avg)
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    return loss
+
+    # Function to plot pulse propagation using the trained model
+
+
+def plot_model_pulse_propagation(model, standardized_input, standardization_params, parameters):
+    # Constants
+    T0 = parameters['T0']  # Initial pulse width (ps)
+    L = parameters['L']  # Fiber length (km)
+    dz = parameters['dz']  # Step size in z (km), reduced for higher accuracy
+    T = parameters['T']  # Time window (ps)
+    Nt = parameters['Nt']  # Increased number of time points for better resolution
+    dt = parameters['dt']  # Step size in t (ps)
+    alpha = parameters['alpha']
+    beta_2 = parameters['beta_2']
+    gamma = parameters['gamma']
+
+    t = np.linspace(-T / 2, T / 2, Nt)
+    L_D = T0 ** 2 / abs(beta_2)
+
+    z = np.linspace(0, L, int(L / dz))
+
+    # Get predictions from the model
+    predictions = model.predict(standardized_input)
+
+    input_mean, input_std, output_mean, output_std = standardization_params
+
+    # De-normalize the predicted output
+    predictions_real = predictions[:, 0] * output_std[0] + output_mean[0]
+    predictions_imag = predictions[:, 1] * output_std[1] + output_mean[1]
+    predictions_complex = predictions_real + 1j * predictions_imag
+
+    A_t = predictions_complex.reshape(len(z), len(t))
+
+    os.makedirs('plots', exist_ok=True)
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_dir = os.path.join('plots', params_str)
+    os.makedirs(params_dir, exist_ok=True)
+
+    # Plot the results
+    plt.figure(figsize=(20, 5))
+    plt.imshow(np.abs(A_t).T, extent=[(z / L_D).min(), (z / L_D).max(), (t / T0).min(), (t / T0).max()], aspect='auto',
+               origin='lower', cmap='jet')
+    plt.colorbar(label='|A(z,t)|')
+    plt.xlabel(f'Distance (z) | L_D = {round(L_D, 2)}Km')
+    plt.ylabel(f'Time (t) | T0 = {T0}Ps')
+    plt.title(f'Pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta_2}, gamma={gamma}')
+    plt.savefig(os.path.join(params_dir, 'PINN pulse propagation'))
+    plt.close()
+
+    # 3D plot
+    Z, T = np.meshgrid(z / L_D, t / T0)
+    fig = plt.figure(figsize=(24, 16))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot_surface(Z, T, np.abs(A_t.T), cmap='jet')
+    ax.set_xlabel(f'Distance (z) | L_D = {round(L_D, 2)}Km')
+    ax.set_ylabel(f'Time (t) | T0 = {T0}Ps')
+    ax.set_zlabel('|A(z,t)|')
+    ax.set_title(f'3D view of pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta_2}, gamma={gamma}')
+    plt.savefig(os.path.join(params_dir, 'PINN pulse propagation 3D'))
+    plt.close()
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(t, np.abs(A_t[0, :]), label='Initial Pulse (A0)')
+    plt.plot(t, np.abs(A_t[-1, :]), label='Final Pulse (A final)')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Amplitude')
+    plt.title('Initial and Final Pulse Comparison')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(params_dir, 'Initial and Final Pulse Comparison'))
+    plt.close()
+
+
+def plot_ssfm_pulse_propagation(standardization_params, standardized_output_data, Z_grid, T_grid):
+    input_mean, input_std, output_mean, output_std = standardization_params
+
+    # De-normalize the standardized output data
+    ssfm_real = standardized_output_data[:, 0] * output_std[0] + output_mean[0]
+    ssfm_imag = standardized_output_data[:, 1] * output_std[1] + output_mean[1]
+    ssfm_complex = ssfm_real + 1j * ssfm_imag
+
+    # Reshape the predictions to match the grid shape
+    A_ssfm = ssfm_complex.reshape(Z_grid.shape)
+
+    # Calculate the extent values
+    xmin, xmax = Z_grid.min(), Z_grid.max()
+    ymin, ymax = T_grid.min(), T_grid.max()
+
+
+    # Plot the results
+    plt.figure(figsize=(20, 5))
+    # Pass the calculated extent values
+    plt.imshow(np.abs(A_ssfm).T, extent=[xmin, xmax, ymin, ymax],
+               aspect='auto', origin='lower', cmap='jet')
+    plt.colorbar(label='|A(z,t)|')
+    plt.xlabel(f'Distance (km)')
+    plt.ylabel(f'Time (ps)')
+    plt.title('SSFM - Pulse propagation |A(z,t)|')
+    plt.savefig('SSFM pulse propagation')
+    plt.close()
+
+
+def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid, t_grid, standardization_params, parameters):
+    # Get predictions from the model
+    predictions = pinn_model.predict(standardized_input)
+
+    input_mean, input_std, output_mean, output_std = standardization_params
+
+    # De-normalize the predicted output
+    predictions_real = predictions[:, 0] * output_std[0] + output_mean[0]
+    predictions_imag = predictions[:, 1] * output_std[1] + output_mean[1]
+    predictions_complex = predictions_real + 1j * predictions_imag
+
+    # De-normalize the SSFM output
+    ssfm_real = standardized_output[:, 0] * output_std[0] + output_mean[0]
+    ssfm_imag = standardized_output[:, 1] * output_std[1] + output_mean[1]
+    ssfm_complex = ssfm_real + 1j * ssfm_imag
+
+    # Determine the correct reshape dimensions
+    reshape_dim1 = z_grid.shape[0]  # Number of z points
+    reshape_dim2 = t_grid.shape[1]  # Number of t points
+
+    # Reshape the predictions and SSFM output to match the grid shape
+    predictions_complex = predictions_complex.reshape(reshape_dim1, reshape_dim2)
+    ssfm_complex = ssfm_complex.reshape(reshape_dim1, reshape_dim2)
+
+    # Calculate MSE
+    mse = np.square(np.abs(predictions_complex - ssfm_complex))
+
+    os.makedirs('plots', exist_ok=True)
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_dir = os.path.join('plots', params_str)
+    os.makedirs(params_dir, exist_ok=True)
+
+    # Plot the MSE heatmap
+    plt.figure(figsize=(20, 5))
+    # Correct the extent parameter to include all four bounds
+    plt.imshow(mse.T, extent=[z_grid.min(), z_grid.max(), t_grid.min(), t_grid.max()],
+               aspect='auto', origin='lower', cmap='jet')
+    plt.colorbar(label='MSE')
+    plt.xlabel('Distance (km)')
+    plt.ylabel('Time (ps)')
+    plt.title('MSE between A from PINN and A from SSFM')
+    plt.savefig(os.path.join(params_dir, 'MSE between A from PINN and A from SSFM'))
+    plt.close()
+
+
+def plot_history(history, parameters):
+    os.makedirs('plots', exist_ok=True)
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_dir = os.path.join('plots', params_str)
+    os.makedirs(params_dir, exist_ok=True)
+
+    plt.plot(history['loss'], label='Train')
+    plt.plot(history['val_loss'], label='Validation')
+    plt.plot(history['test_loss'], label='Test')
+    plt.plot(history['nlse_loss'], label='NLSE')
+    plt.plot(history['A0_loss'], label='A0')
+    plt.plot(history['Ab_loss'], label='Ab')
+    plt.yscale('log')
     plt.title('Model loss')
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
-    plt.legend(['Train', 'Validation'], loc='upper right')
-    plt.show()
-    plt.plot(history.history['acc'])
-    plt.plot(history.history['val_acc'])
-    plt.title('Model accuracy')
-    plt.ylabel('Accuracy')
-    plt.xlabel('Epoch')
-    plt.legend(['Train', 'Validation'], loc='upper right')
-    plt.show()
-    
-
+    plt.legend(loc='upper right')
+    plt.savefig(os.path.join(params_dir, 'History plot'))
+    plt.close()
