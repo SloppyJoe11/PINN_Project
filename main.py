@@ -1,255 +1,181 @@
-
-import tensorflow as tf
-import numpy as np
-import matplotlib.pyplot as plt
-from tensorflow.keras.layers import Input, Dense
-from tensorflow.keras import Model
-from sklearn.model_selection import train_test_split
+from Stas_functions import *
 
 # Suppress TensorFlow warnings
 tf.get_logger().setLevel('ERROR')
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow C++ warnings
 
-# Parameters for the NLSE
-beta_2 = -21.27e-27  # s^2/m
-gamma = 1.3e-3  # 1/(W*m)
-alpha = 0.046 / 1000  # Convert from dB/km if needed, else use direct 1/m
-
-
-# Build the model
-def build_pinn_model(input_shape=2, num_neurons=100, num_layers=4, output_shape=2):
-    inputs = Input(shape=(input_shape,))
-    x = Dense(num_neurons, activation='tanh')(inputs)
-    for _ in range(num_layers - 1):
-        x = Dense(num_neurons, activation='tanh')(x)
-    outputs = Dense(output_shape, activation=None)(x)
-    model = Model(inputs=inputs, outputs=outputs)
-    return model
-
-
-# Generate the training data
-def generate_training_data(A0, fiber_length, num_steps, dt, dz, beta_2, gamma, alpha):
-    T = np.arange(-num_steps // 2, num_steps // 2) * dt
-    Z = np.arange(0, fiber_length, dz)
-    W = np.fft.fftfreq(T.size, d=dt) * 2 * np.pi
-    W = np.fft.fftshift(W)
-    A = np.zeros((len(Z), len(T)), dtype=complex)
-    A[0, :] = A0(T)
-
-    for i in range(1, len(Z)):
-        A[i - 1, :] = A[i - 1, :] * np.exp(-alpha * dz / 2)
-        A_fft = np.fft.fft(A[i - 1, :])
-        A_fft = A_fft * np.exp(-1j * (beta_2 / 2) * W ** 2 * dz)
-        A[i, :] = np.fft.ifft(A_fft)
-        A[i, :] = A[i, :] * np.exp(1j * gamma * np.abs(A[i, :]) ** 2 * dz)
-        A[i, :] = A[i, :] * np.exp(-alpha * dz / 2)
-
-    return Z, T, A
+# ------------------------ Load the processed data------------------------ #
+print('Loading Data...')
+data = np.load('processed_training_data.npz')
+input_train = data['input_train']
+output_train = data['output_train']
+input_val = data['input_val']
+output_val = data['output_val']
+input_test = data['input_test']
+output_test = data['output_test']
+A0_train = data['A0_train']
+A0_val = data['A0_val']
+A_boundary_train = data['A_boundary_train']
+A_boundary_val = data['A_boundary_val']
+standardization_params = data['standardization_params']
+standardized_input_data = data['standardized_input_data']
+standardized_output_data = data['standardized_output_data']
+z_grid = data['Z_grid']
+t_grid = data['T_grid']
+print('Data loaded!!!')
 
 
-# Define the initial pulse shape, e.g., a Gaussian pulse
-def gaussian_pulse(T, pulse_width=1.0, peak_power=1.0):
-    return np.sqrt(peak_power) * np.exp(-T**2 / (2 * pulse_width**2))
+# ----------------------------- Parameters setting --------------------------------#
 
-
-# Normalize data
-def standardize_data(input_data, output_data):
-    input_mean = input_data.mean(axis=0)
-    input_std = input_data.std(axis=0)
-    input_std[input_std == 0] = 1
-    standardized_input = (input_data - input_mean) / input_std
-
-    output_mean = output_data.mean(axis=0)
-    output_std = output_data.std(axis=0)
-    output_std[output_std == 0] = 1
-    standardized_output = (output_data - output_mean) / output_std
-
-    return standardized_input, standardized_output, (input_mean, input_std, output_mean, output_std)
-
-# Plot training history
-def plot_history(history):
-    plt.plot(history['loss'])
-    plt.plot(history['val_loss'])
-    plt.title('Model loss')
-    plt.ylabel('Loss')
-    plt.xlabel('Epoch')
-    plt.legend(['Train', 'Validation'], loc='upper right')
-    plt.show()
-
-# Combined loss function
-def combined_loss(y_true, y_pred):
-    A_true_real, A_true_imag, z, t = tf.split(y_true, [1, 1, 1, 1], axis=-1)
-    A_pred_real, A_pred_imag = tf.split(y_pred, 2, axis=-1)
-
-    # Combine real and imaginary parts to form complex numbers
-    A_true = tf.complex(tf.cast(A_true_real, dtype=tf.float32), tf.cast(A_true_imag, dtype=tf.float32))
-    A_pred = tf.complex(tf.cast(A_pred_real, dtype=tf.float32), tf.cast(A_pred_imag, dtype=tf.float32))
-
-    # Prediction error (MSE)
-    prediction_error = tf.reduce_mean(tf.square(tf.abs(A_pred - A_true)))
-
-    # NLSE residual
-    with tf.GradientTape(persistent=True) as tape:
-        tape.watch([z, t])
-        A_pred = pinn_model(tf.concat([z, t], axis=1))
-        A_pred_z = tape.gradient(A_pred, z)
-        A_pred_t = tape.gradient(A_pred, t)
-
-    A_pred_tt = tape.gradient(A_pred_t, t)
-
-    del tape
-
-    # Ensure all relevant variables are complex64
-    A_pred = tf.cast(A_pred, dtype=tf.complex64)
-    abs_A_pred_squared = tf.square(tf.abs(A_pred))  # This remains real
-    A_pred_z = tf.cast(A_pred_z, dtype=tf.complex64)
-    A_pred_tt = tf.cast(A_pred_tt, dtype=tf.complex64)
-    beta_2_complex = tf.cast(beta_2, dtype=tf.complex64)
-    alpha_complex = tf.cast(alpha, dtype=tf.complex64)
-    gamma_complex = tf.cast(gamma, dtype=tf.complex64)
-
-    # Compute NLSE residual terms
-    attenuation_complex = alpha_complex * A_pred
-    chrom_dis_complex = (1j * beta_2_complex / 2) * A_pred_tt
-    non_lin_complex = 1j * gamma_complex * tf.cast(abs_A_pred_squared, dtype=tf.complex64) * A_pred
-
-    # NLSE residual calculation
-    nlse_residual = A_pred_z + chrom_dis_complex + attenuation_complex - non_lin_complex
-    nlse_loss_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual)))
-
-    # Combine NLSE loss and prediction error
-    total_loss = tf.add(prediction_error, nlse_loss_term)
-
-    return total_loss
-
-
-# Training step function
-def train_step(model, optimizer, loss_fn, x_batch, y_batch):
-    with tf.GradientTape() as tape:
-        y_pred = model(x_batch, training=True)
-        loss = loss_fn(y_batch, y_pred)
-    gradients = tape.gradient(loss, model.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-    return loss
-
-
-# Main code
-pinn_model = build_pinn_model()
-
-# Parameters for data generation
-fiber_length = 100  # meters
-num_steps = 1024
-dt = 1e-4  # seconds
-dz = 0.1  # meters
-
-
-# Generate the training data
-Z, T, A = generate_training_data(gaussian_pulse, fiber_length, num_steps, dt, dz, beta_2, gamma, alpha)
-
-# Create a 2D grid of Z and T values
-Z_grid, T_grid = np.meshgrid(Z, T, indexing='ij')
-input_data = np.vstack((Z_grid.flatten(), T_grid.flatten())).T
-
-# Flatten A to have the same shape as input_data
-output_data = A.flatten()
-output_data = np.stack((output_data.real, output_data.imag), axis=-1)
-
-# Normalize the input and output data
-standardized_input_data, standardized_output_data, standardization_params = standardize_data(input_data, output_data)
-standardized_output_data = np.concatenate((standardized_output_data, input_data), axis=-1)
-
-# Split the dataset into training and (validation + test)
-input_train, input_val_test, output_train, output_val_test = train_test_split(
-    standardized_input_data,
-    standardized_output_data,
-    test_size=0.3,
-    random_state=42
-)
-
-# Further split for validation and test sets
-input_val, input_test, output_val, output_test = train_test_split(
-    input_val_test,
-    output_val_test,
-    test_size=0.5,
-    random_state=42
-)
-
-# Define optimizer
-optimizer = tf.keras.optimizers.Adam()
-
-# Load the best model parameters if available
-checkpoint_path = "best_model.weights.h5"
-try:
-    pinn_model.load_weights(checkpoint_path)
-    print("Loaded best model parameters from checkpoint.")
-except:
-    print("No checkpoint found, training from scratch.")
-
-
-# Define the ModelCheckpoint callback
-checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-    filepath=checkpoint_path,
-    monitor='val_loss',
-    save_best_only=True,
-    save_weights_only=True,
-    verbose=1
-)
+pinn_model = build_pinn_model()  # Create the network
 
 # Training parameters
-epochs = 1
-batch_size = 1024
-
-input_train = tf.cast(input_train, tf.float32)
-output_train = tf.cast(output_train, tf.float32)
-input_val = tf.cast(input_val, tf.float32)
-
-# Prepare the dataset
-train_dataset = tf.data.Dataset.from_tensor_slices((input_train, output_train)).batch(batch_size)
-val_dataset = tf.data.Dataset.from_tensor_slices((input_val, output_val)).batch(batch_size)
-test_dataset = tf.data.Dataset.from_tensor_slices((input_test, output_test)).batch(batch_size)
+epochs = 3
+batch_size = 128
 
 # Early stopping parameters
-patience = 10  # Number of epochs to wait for improvement before stopping
+patience = 40  # Number of epochs to wait for improvement before stopping
 best_val_loss = float('inf')
 wait = 0
 
-# Custom training loop
-history = {'loss': [], 'val_loss': []}
 
-print(f"Train dataset size: {len(list(train_dataset))} batches")
-print(f"Validation dataset size: {len(list(val_dataset))} batches")
-print(f"Test dataset size: {len(list(test_dataset))} batches")
+# Parameters for the NLSE
+beta_2 = -20  # ps^2/km
+gamma = 1.27  # 1/(W*km)
+alpha = 0  # Convert from dB/km if needed, else use direct 1/m
+parameters = {'epochs': epochs, 'alpha': alpha, 'beta_2': beta_2, 'gamma': gamma,
+              'T0': 20, 'L': 80, 'T': 800, 'Nt': 512, 'dt': 800/512, 'dz': 0.1}
+
+
+# ------------------------- Data preparation --------------------------- #
+
+# Combine input and output data for training
+train_data = np.concatenate((input_train, output_train), axis=1)
+val_data = np.concatenate((input_val, output_val), axis=1)
+test_data = np.concatenate((input_test, output_test), axis=1)
+
+# Prepare the validation and test datasets (without shuffling)
+val_dataset = tf.data.Dataset.from_tensor_slices(val_data).batch(batch_size)
+test_dataset = tf.data.Dataset.from_tensor_slices(test_data).batch(batch_size)
+A0_dataset_val = tf.data.Dataset.from_tensor_slices(A0_val).batch(batch_size, drop_remainder=True).repeat()
+boundary_dataset_val = tf.data.Dataset.from_tensor_slices(A_boundary_val).batch(batch_size, drop_remainder=True).repeat()
+
+buffer_size_train = len(input_train)
+buffer_size_A0 = len(A0_train)
+buffer_size_boundary = len(A_boundary_train)
+
+# ---------------------------- Optimizer and Checkpoint ---------------------- #
+# Define optimizer
+optimizer = tf.keras.optimizers.Adam()
+checkpoint_path = "best_model.weights.h5"
+
+print('Load latest model parameters?')
+choice = input(' y/n: ')
+if choice == 'y':
+    # Load the best model parameters if available
+    try:
+        pinn_model.load_weights(checkpoint_path)
+        print("Loaded best model parameters from checkpoint.")
+    except:
+        print("No checkpoint found, training from scratch.")
+else:
+    print('Starting new training process.')
+
+# Define the ModelCheckpoint callback
+checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath=checkpoint_path, monitor='val_loss',
+                                                         save_best_only=True, save_weights_only=True, verbose=1)
+history = {'loss': [], 'val_loss': [], 'test_loss': [], 'nlse_loss': [], 'A0_loss': [], 'Ab_loss': []}
+
+# ---------------------------- Pre-Train model test ------------------------------- #
+
+test_loss_avg_start = tf.keras.metrics.Mean()
+#
+# for test_batch in test_dataset:
+#     test_loss_term = test_loss(test_batch, pinn_model)
+#     test_loss_avg_start.update_state(test_loss_term)
+# print(f'Test loss before training: {test_loss_avg_start.result().numpy()}')
+#
+#
+# plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
+
+
+# ----------------------------- Train Loop ----------------------------#
 
 for epoch in range(epochs):
+    start_time = time.time()
+
     epoch_loss_avg = tf.keras.metrics.Mean()
     epoch_val_loss_avg = tf.keras.metrics.Mean()
+    epoch_test_loss_avg = tf.keras.metrics.Mean()
 
-    training_batch_num = 1
+    epoch_nlse_loss_avg = tf.keras.metrics.Mean()
+    epoch_A0_loss_avg = tf.keras.metrics.Mean()
+    epoch_Ab_loss_avg = tf.keras.metrics.Mean()
+
+    # ----------------------- Shuffling and batching -----------------#
+    train_dataset = tf.data.Dataset.from_tensor_slices(train_data).shuffle(buffer_size_train).batch(batch_size,
+                                                                                                    drop_remainder=True)
+    A0_dataset = tf.data.Dataset.from_tensor_slices(A0_train).shuffle(buffer_size_A0).batch(batch_size,
+                                                                                            drop_remainder=True).repeat()
+    boundary_dataset = tf.data.Dataset.from_tensor_slices(A_boundary_train).shuffle(buffer_size_boundary).batch(
+        batch_size,
+        drop_remainder=True).repeat()
+
+    # Combine the datasets into one
+    combined_train_dataset = tf.data.Dataset.zip((train_dataset, A0_dataset, boundary_dataset))
+    combined_validation_dataset = tf.data.Dataset.zip((val_dataset, A0_dataset_val, boundary_dataset_val))
+
+    train_batch_num = 1
     val_batch_num = 1
 
-    # Training loop
-    for x_batch, y_batch in train_dataset:
-        loss = train_step(pinn_model, optimizer, combined_loss, x_batch, y_batch)
+    total_batches = len(list(train_dataset))
+
+    # ----------------------------------- Training loop ---------------------------- #
+    for train_batch, A0_batch, A_boundary_batch in combined_train_dataset:
+        loss = train_step(pinn_model, optimizer, train_batch, A0_batch, A_boundary_batch, parameters,
+                          epoch_nlse_loss_avg, epoch_A0_loss_avg, epoch_Ab_loss_avg)
         epoch_loss_avg.update_state(loss)
-        training_batch_num += 1
-        if (training_batch_num % 100) == 0:
-            print(f"Training batch number {training_batch_num}/{len(list(train_dataset))}, Training loss: {loss:.4f}")
+
+        # Print loading bar
+        progress = train_batch_num / total_batches
+        bar = f"[{'=' * int(progress * 40):40s}] {int(progress * 100)}%"
+        sys.stdout.write(f"\rEpoch {epoch + 1}/{epochs} {bar}")
+        sys.stdout.flush()
+
+        train_batch_num += 1
 
     # Validation loop
-    for x_batch_val, y_batch_val in val_dataset:
-        y_pred_val = pinn_model(x_batch_val, training=False)
-        val_loss = combined_loss(y_batch_val, y_pred_val)
+    for val_batch, A0_batch, A_boundary_batch in combined_validation_dataset:
+        val_loss = train_loss(val_batch, A0_batch, A_boundary_batch, pinn_model, parameters,
+                              epoch_nlse_loss_avg, epoch_A0_loss_avg, epoch_Ab_loss_avg)
         epoch_val_loss_avg.update_state(val_loss)
         val_batch_num += 1
-        if (val_batch_num % 50) == 0:
-            print(f"Validation batch number {val_batch_num}/{len(list(val_dataset))}, Validation loss: {val_loss:.4f}")
+
+    # Testing loop
+    for test_batch in test_dataset:
+        test_loss_term = test_loss(test_batch, pinn_model)
+        epoch_test_loss_avg.update_state(test_loss_term)
 
     # Record the loss and val_loss for each epoch
     train_loss_value = epoch_loss_avg.result().numpy()
     val_loss_value = epoch_val_loss_avg.result().numpy()
-    history['loss'].append(epoch_loss_avg.result().numpy())
-    history['val_loss'].append(epoch_val_loss_avg.result().numpy())
+    test_loss_value = epoch_test_loss_avg.result().numpy()
 
-    print(f"Epoch {epoch + 1}/{epochs}, Loss: {epoch_loss_avg.result().numpy()}, Val Loss: {epoch_val_loss_avg.result().numpy()}")
+    A0_loss_value = epoch_A0_loss_avg.result().numpy()
+    Ab_loss_value = epoch_Ab_loss_avg.result().numpy()
+    nlse_loss_value = epoch_nlse_loss_avg.result().numpy()
+
+    history['loss'].append(train_loss_value)
+    history['val_loss'].append(val_loss_value)
+    history['test_loss'].append(test_loss_value)
+    history['nlse_loss'].append(nlse_loss_value)
+    history['A0_loss'].append(A0_loss_value)
+    history['Ab_loss'].append(Ab_loss_value)
+
+    print()
+    print(f"Epoch {epoch + 1}/{epochs}, Loss: {train_loss_value},"
+          f" Val Loss: {val_loss_value},"
+          f" Test Loss: {test_loss_value}")
 
     # Save the best model parameters
     if val_loss_value < best_val_loss:
@@ -265,22 +191,32 @@ for epoch in range(epochs):
             print("Early stopping triggered")
             break
 
-    # Early stopping check
-    if epoch > 50 and epoch_val_loss_avg.result().numpy() >= min(history['val_loss'][-50:]):
-        print("Early stopping triggered")
-        break
+    end_time = time.time()
+    epoch_duration = end_time - start_time  # Calculate duration
+    print(f"Epoch {epoch + 1} completed in {epoch_duration:.2f} seconds")
 
-plot_history(history)
+    # plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
+
+np.savez('history.npz', history=history)
+print('Saved history to history.npz')
+
+
+history = np.load('history.npz', allow_pickle=True)
+history = history['history'].item()
+
+plot_history(history, parameters)
 
 # Evaluate the model on the test set
 
 test_loss_avg = tf.keras.metrics.Mean()
 
-for x_batch_test, y_batch_test in test_dataset:
-    y_pred_test = pinn_model(x_batch_test, training=False)
-    test_loss = combined_loss(y_batch_test, y_pred_test)
-    test_loss_avg.update_state(test_loss)
+for test_batch in test_dataset:
+    test_loss_term = test_loss(test_batch, pinn_model,)
+    test_loss_avg.update_state(test_loss_term)
 
-print(f"The final test loss is: {test_loss_avg.result().numpy()}")
-print("The program has finished. Press Enter to exit.")
-input()
+print(f"The final test loss is: {test_loss_avg.result().numpy()},"
+      f" the starting test loss is: {test_loss_avg_start.result().numpy()}")
+
+# Function to calculate MSE between A from PINN and A from SSFM and plot it as a heatmap
+plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
+plot_mse_heatmap(pinn_model, standardized_input_data, standardized_output_data, z_grid, t_grid, standardization_params, parameters)
