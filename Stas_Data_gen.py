@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pickle
 from sklearn.model_selection import train_test_split
 from scipy.fft import fft, ifft, fftshift
 
@@ -23,6 +24,7 @@ Nt = 512  # Increased number of time points for better resolution
 dt = T / Nt
 t = np.linspace(-T / 2, T / 2, Nt)
 
+
 # Initial pulse - gaussian
 A = A0 * np.exp(-t ** 2 / T0 ** 2)
 
@@ -31,7 +33,7 @@ f = np.fft.fftfreq(Nt, dt)
 omega = 2 * np.pi * f
 
 # Calculate dispersion length
-L_D = T0**2 / abs(beta2)   # TODO: after fixing e-28, delete *10
+L_D = T0**2 / abs(beta2)
 L_n = 1 / (gamma*P0)
 
 print(f'L_n = {L_n}, L_D = {L_D}')
@@ -91,7 +93,7 @@ def plot_pulse_3d(z, t, A_t, T0, L_D, Nt):
     ax.set_zlabel('|A(z,t)|')
     ax.set_title(f'3D view of SSFM - Pulse propagation |A(z,t)| {Nt} time samples, '
                  f'alpha = {alpha}, beta = {beta2}, gamma = {gamma}')
-    ax.set_zlim(0, 1)  # Lower the amplitude range
+    ax.set_zlim(0, 0.035)  # Lower the amplitude range
     plt.savefig('SSFM pulse 3d.png')
     plt.close()
 
@@ -148,23 +150,12 @@ A_0_indices = np.where(combined_data[:, 0] == 0)[0]
 boundary_indices_minus_T = np.where(combined_data[:, 1] == -T/2)[0]
 boundary_indices_plus_T = np.where(combined_data[:, 1] == T/2)[0]
 
+# Join the indices
+combined_indices = np.concatenate((A_0_indices, boundary_indices_minus_T, boundary_indices_plus_T))
+
 # Normalize the input and output data
 standardized_input_data, standardized_output_data, standardization_params = standardize_data(input_data, output_data)
 standardized_combined_data = np.concatenate((standardized_input_data, standardized_output_data), axis=-1)
-
-# Split the dataset into training and (validation + test)
-input_train, input_val_test, output_train, output_val_test = train_test_split(
-    standardized_input_data,
-    standardized_output_data,
-    test_size=0.3,
-    random_state=42)
-
-# Further split for validation and test sets
-input_val, input_test, output_val, output_test = train_test_split(
-    input_val_test,
-    output_val_test,
-    test_size=0.5,
-    random_state=42)
 
 # Extract the rows for A_0 and boundary conditions
 A_0 = standardized_combined_data[A_0_indices]
@@ -172,22 +163,58 @@ boundary_A_minus_T = standardized_combined_data[boundary_indices_minus_T]
 boundary_A_plus_T = standardized_combined_data[boundary_indices_plus_T]
 A_boundary = np.concatenate((boundary_A_minus_T, boundary_A_plus_T), axis=0)
 
+
+print(standardized_combined_data.shape)
+standardized_combined_data_fiber = np.delete(standardized_combined_data, combined_indices, axis=0)
+print(standardized_combined_data_fiber.shape)
+
+# Split the dataset into training and (validation + test)
+train_data, val_test_data = train_test_split(
+    standardized_combined_data_fiber,
+    test_size=0.3,
+    random_state=42)
+
+# Further split for validation and test sets
+val_data, test_data = train_test_split(
+    val_test_data,
+    test_size=0.5,
+    random_state=42)
+
 # Split A_0 and A_boundary into training and validation sets
 A0_train, A0_val = train_test_split(A_0, test_size=0.3, random_state=42)
 A_boundary_train, A_boundary_val = train_test_split(A_boundary, test_size=0.3, random_state=42)
 
+# Dictionary of parameters
+parameters = {
+    'T0': T0,
+    'P0': P0,
+    'A0': A0,
+    'L': L,
+    'alpha': alpha,
+    'beta2': beta2,
+    'gamma': gamma,
+    'dz': dz,
+    'T': T,
+    'Nt': Nt,
+    'dt': dt,
+    't': t
+}
+
 # Save the processed data
 np.savez('processed_training_data.npz',
 
-         input_train=input_train,               output_train=output_train,
-         input_val=input_val,                   output_val=output_val,
-         input_test=input_test,                 output_test=output_test,
+         train_data=train_data,
+         test_data=test_data,                   val_data=val_data,
+
          A0_train=A0_train,                     A0_val=A0_val,
          A_boundary_train=A_boundary_train,     A_boundary_val=A_boundary_val,
          Z_grid=Z_grid,                         T_grid=T_grid,
+
+         standardized_combined_data=standardized_combined_data,
          standardized_input_data=standardized_input_data,
          standardized_output_data=standardized_output_data,
-         standardization_params=standardization_params)
+         standardization_params=standardization_params
+         )
 
 print("Processed training data saved to 'processed_training_data.npz'")
 

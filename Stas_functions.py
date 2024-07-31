@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import warnings
+import pickle
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,6 +24,7 @@ def build_pinn_model(input_shape=2, num_neurons=100, num_layers=4, output_shape=
     model = Model(inputs=inputs, outputs=outputs)
     return model
 
+
 # Train loss function
 def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nlse_avg, a0_avg, ab_avg):
 
@@ -35,7 +37,7 @@ def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nl
     Ab_mse_term = boundary_condition_loss(boundary_batch, pinn_model)
     ab_avg.update_state(Ab_mse_term)
 
-    return nlse_loss_term + A0_mse_term + Ab_mse_term
+    return A0_mse_term + Ab_mse_term + nlse_loss_term
 
 
 def nlse_residual(fiber_batch, pinn_model, parameters):
@@ -48,10 +50,12 @@ def nlse_residual(fiber_batch, pinn_model, parameters):
         tape2.watch([z, t])
         a_pred = pinn_model(tf.concat([z, t], axis=-1))
         a_pred_real, a_pred_imag = tf.split(a_pred, 2, axis=-1)
-        a_z_real = tape2.gradient(a_pred_real, z)
-        a_z_imag = tape2.gradient(a_pred_imag, z)
+
         a_t_real = tape2.gradient(a_pred_real, t)
         a_t_imag = tape2.gradient(a_pred_imag, t)
+
+    a_z_real = tape2.gradient(a_pred_real, z)
+    a_z_imag = tape2.gradient(a_pred_imag, z)
 
     a_pred_complex = tf.complex(a_pred_real, a_pred_imag)
     a_z_complex = tf.cast(tf.complex(a_z_real, a_z_imag), tf.complex64)
@@ -68,7 +72,7 @@ def nlse_residual(fiber_batch, pinn_model, parameters):
     non_lin_complex = 1j * gamma * a_pred_abs_squared * a_pred_complex
 
     nlse_residual_value = a_z_complex + chrom_dis_complex + attenuation_complex - non_lin_complex
-    nlse_term = tf.reduce_mean(tf.square(tf.abs(nlse_residual_value)))
+    nlse_term = tf.abs(nlse_residual_value)
 
     return nlse_term
 
@@ -98,27 +102,31 @@ def boundary_condition_loss(boundary_batch, pinn_model):
 def test_loss(batch, pinn_model):
     z_test, t_test, a_real, a_image = tf.split(batch, [1, 1, 1, 1], axis=-1)
     a_sffm = tf.cast(tf.complex(a_real, a_image), tf.complex64)
+    a_sffm_abs_squared = tf.square(tf.abs(a_sffm))
 
     a_pred = pinn_model(tf.concat([z_test, t_test], axis=-1))
     a_pred_real, a_pred_imag = tf.split(a_pred, 2, axis=-1)
     a_pred_complex = tf.complex(a_pred_real, a_pred_imag)
+    a_pred_abs_squared = tf.square(tf.abs(a_pred_complex))
 
-    testing_loss = tf.reduce_mean(tf.square(tf.abs(a_pred_complex - a_sffm)))
+    testing_loss = tf.abs(a_sffm_abs_squared - a_pred_abs_squared)
     return testing_loss
 
 
 # Training step function
 def train_step(model, optimizer, input_train_batch, A0_batch, boundary_batch, parameters, nlse_avg, a0_avg, ab_avg):
+
     with tf.GradientTape() as tape:
         loss = train_loss(input_train_batch, A0_batch, boundary_batch, model, parameters, nlse_avg, a0_avg, ab_avg)
+
     gradients = tape.gradient(loss, model.trainable_variables)
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
     return loss
 
-    # Function to plot pulse propagation using the trained model
 
-
+# Function to plot pulse propagation using the trained model
 def plot_model_pulse_propagation(model, standardized_input, standardization_params, parameters):
+
     # Constants
     T0 = parameters['T0']  # Initial pulse width (ps)
     L = parameters['L']  # Fiber length (km)
@@ -175,7 +183,7 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
     plt.savefig(os.path.join(params_dir, 'PINN pulse propagation 3D'))
     plt.close()
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(20, 5))
     plt.plot(t, np.abs(A_t[0, :]), label='Initial Pulse (A0)')
     plt.plot(t, np.abs(A_t[-1, :]), label='Final Pulse (A final)')
     plt.xlabel('Time (ps)')
@@ -201,7 +209,6 @@ def plot_ssfm_pulse_propagation(standardization_params, standardized_output_data
     # Calculate the extent values
     xmin, xmax = Z_grid.min(), Z_grid.max()
     ymin, ymax = T_grid.min(), T_grid.max()
-
 
     # Plot the results
     plt.figure(figsize=(20, 5))
@@ -240,8 +247,8 @@ def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid
     predictions_complex = predictions_complex.reshape(reshape_dim1, reshape_dim2)
     ssfm_complex = ssfm_complex.reshape(reshape_dim1, reshape_dim2)
 
-    # Calculate MSE
-    mse = np.square(np.abs(predictions_complex - ssfm_complex))
+    # Calculate absolut error
+    absolut_error = np.abs((np.abs(predictions_complex)) - (np.abs(ssfm_complex)))
 
     os.makedirs('plots', exist_ok=True)
     params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
@@ -251,13 +258,13 @@ def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid
     # Plot the MSE heatmap
     plt.figure(figsize=(20, 5))
     # Correct the extent parameter to include all four bounds
-    plt.imshow(mse.T, extent=[z_grid.min(), z_grid.max(), t_grid.min(), t_grid.max()],
+    plt.imshow(absolut_error.T, extent=[z_grid.min(), z_grid.max(), t_grid.min(), t_grid.max()],
                aspect='auto', origin='lower', cmap='jet')
-    plt.colorbar(label='MSE')
+    plt.colorbar(label='Absolut Error')
     plt.xlabel('Distance (km)')
     plt.ylabel('Time (ps)')
-    plt.title('MSE between A from PINN and A from SSFM')
-    plt.savefig(os.path.join(params_dir, 'MSE between A from PINN and A from SSFM'))
+    plt.title('Absolut Error between A from PINN and A from SSFM')
+    plt.savefig(os.path.join(params_dir, 'Absolut Error between A from PINN and A from SSFM'))
     plt.close()
 
 

@@ -7,16 +7,15 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow C++ warnings
 # ------------------------ Load the processed data------------------------ #
 print('Loading Data...')
 data = np.load('processed_training_data.npz')
-input_train = data['input_train']
-output_train = data['output_train']
-input_val = data['input_val']
-output_val = data['output_val']
-input_test = data['input_test']
-output_test = data['output_test']
+train_data = data['train_data']
+val_data = data['val_data']
+test_data = data['test_data']
 A0_train = data['A0_train']
 A0_val = data['A0_val']
 A_boundary_train = data['A_boundary_train']
 A_boundary_val = data['A_boundary_val']
+
+standardized_combined_data = data['standardized_combined_data']
 standardization_params = data['standardization_params']
 standardized_input_data = data['standardized_input_data']
 standardized_output_data = data['standardized_output_data']
@@ -29,8 +28,13 @@ print('Data loaded!!!')
 
 pinn_model = build_pinn_model()  # Create the network
 
+# Load the parameters dictionary from a file
+with open('parameters.pkl', 'rb') as f:
+    parameters = pickle.load(f)
+
 # Training parameters
-epochs = 3
+epochs = 4
+parameters['epochs'] = epochs
 batch_size = 128
 
 # Early stopping parameters
@@ -38,21 +42,7 @@ patience = 40  # Number of epochs to wait for improvement before stopping
 best_val_loss = float('inf')
 wait = 0
 
-
-# Parameters for the NLSE
-beta_2 = -20  # ps^2/km
-gamma = 1.27  # 1/(W*km)
-alpha = 0  # Convert from dB/km if needed, else use direct 1/m
-parameters = {'epochs': epochs, 'alpha': alpha, 'beta_2': beta_2, 'gamma': gamma,
-              'T0': 20, 'L': 80, 'T': 800, 'Nt': 512, 'dt': 800/512, 'dz': 0.1}
-
-
 # ------------------------- Data preparation --------------------------- #
-
-# Combine input and output data for training
-train_data = np.concatenate((input_train, output_train), axis=1)
-val_data = np.concatenate((input_val, output_val), axis=1)
-test_data = np.concatenate((input_test, output_test), axis=1)
 
 # Prepare the validation and test datasets (without shuffling)
 val_dataset = tf.data.Dataset.from_tensor_slices(val_data).batch(batch_size)
@@ -60,7 +50,9 @@ test_dataset = tf.data.Dataset.from_tensor_slices(test_data).batch(batch_size)
 A0_dataset_val = tf.data.Dataset.from_tensor_slices(A0_val).batch(batch_size, drop_remainder=True).repeat()
 boundary_dataset_val = tf.data.Dataset.from_tensor_slices(A_boundary_val).batch(batch_size, drop_remainder=True).repeat()
 
-buffer_size_train = len(input_train)
+combined_validation_dataset = tf.data.Dataset.zip((val_dataset, A0_dataset_val, boundary_dataset_val))
+
+buffer_size_train = len(train_data)
 buffer_size_A0 = len(A0_train)
 buffer_size_boundary = len(A_boundary_train)
 
@@ -84,6 +76,7 @@ else:
 # Define the ModelCheckpoint callback
 checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath=checkpoint_path, monitor='val_loss',
                                                          save_best_only=True, save_weights_only=True, verbose=1)
+
 history = {'loss': [], 'val_loss': [], 'test_loss': [], 'nlse_loss': [], 'A0_loss': [], 'Ab_loss': []}
 
 # ---------------------------- Pre-Train model test ------------------------------- #
@@ -99,7 +92,7 @@ test_loss_avg_start = tf.keras.metrics.Mean()
 # plot_model_pulse_propagation(pinn_model, standardized_input_data, standardization_params, parameters)
 
 
-# ----------------------------- Train Loop ----------------------------#
+# ----------------------------- Epoch Loop ----------------------------#
 
 for epoch in range(epochs):
     start_time = time.time()
@@ -123,7 +116,6 @@ for epoch in range(epochs):
 
     # Combine the datasets into one
     combined_train_dataset = tf.data.Dataset.zip((train_dataset, A0_dataset, boundary_dataset))
-    combined_validation_dataset = tf.data.Dataset.zip((val_dataset, A0_dataset_val, boundary_dataset_val))
 
     train_batch_num = 1
     val_batch_num = 1
@@ -132,6 +124,7 @@ for epoch in range(epochs):
 
     # ----------------------------------- Training loop ---------------------------- #
     for train_batch, A0_batch, A_boundary_batch in combined_train_dataset:
+
         loss = train_step(pinn_model, optimizer, train_batch, A0_batch, A_boundary_batch, parameters,
                           epoch_nlse_loss_avg, epoch_A0_loss_avg, epoch_Ab_loss_avg)
         epoch_loss_avg.update_state(loss)
