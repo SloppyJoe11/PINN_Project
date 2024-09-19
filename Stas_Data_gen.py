@@ -48,7 +48,7 @@ def ssfm(A, dz, L, beta2, gamma, omega, alpha):
 
     for i in range(1, Nz):
 
-        # Nonlinear step
+        # Nonlinear half step
         nonlinear_phase = np.exp(1j * gamma * np.abs(A_t[i-1, :]) ** 2 * dz / 2)
         A_tilde = A_t[i-1, :] * nonlinear_phase
 
@@ -58,7 +58,7 @@ def ssfm(A, dz, L, beta2, gamma, omega, alpha):
         A_f = A_f * linear_phase
         A_tilde = ifft(A_f)
 
-        # Nonlinear step
+        # Nonlinear half step
         nonlinear_phase = np.exp(1j * gamma * np.abs(A_tilde) ** 2 * dz / 2)
         A_t[i, :] = A_tilde * nonlinear_phase
 
@@ -200,6 +200,11 @@ parameters = {
     't': t
 }
 
+with open('parameters.pkl', 'wb') as f:
+    pickle.dump(parameters, f)
+
+print("Parameters saved to 'parameters.pkl'")
+
 # Save the processed data
 np.savez('processed_training_data.npz',
 
@@ -217,4 +222,6 @@ np.savez('processed_training_data.npz',
          )
 
 print("Processed training data saved to 'processed_training_data.npz'")
+
+
 
