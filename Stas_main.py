@@ -1,4 +1,4 @@
-from Stas_functions import *
+from functions import *
 
 # Suppress TensorFlow warnings
 tf.get_logger().setLevel('ERROR')
@@ -33,15 +33,18 @@ with open('parameters.pkl', 'rb') as f:
     parameters = pickle.load(f)
 
 # Training parameters
-epochs = 4
+epochs = 10
 parameters['epochs'] = epochs
 batch_size = 128
 
 # Early stopping parameters
-patience = 40  # Number of epochs to wait for improvement before stopping
+patience = 10  # Number of epochs to wait for improvement before stopping
 best_val_loss = float('inf')
 wait = 0
 
+parameters["beta2"] = -20
+parameters["gamma"] = 1.27
+print(f'parameters: alpha = {parameters["alpha"]} beta = {parameters["beta2"]} gamma = {parameters["gamma"]}')
 # ------------------------- Data preparation --------------------------- #
 
 # Prepare the validation and test datasets (without shuffling)
@@ -50,9 +53,14 @@ test_dataset = tf.data.Dataset.from_tensor_slices(test_data).batch(batch_size)
 A0_dataset_val = tf.data.Dataset.from_tensor_slices(A0_val).batch(batch_size, drop_remainder=True).repeat()
 boundary_dataset_val = tf.data.Dataset.from_tensor_slices(A_boundary_val).batch(batch_size, drop_remainder=True).repeat()
 
+# Joining validation dataset
 combined_validation_dataset = tf.data.Dataset.zip((val_dataset, A0_dataset_val, boundary_dataset_val))
 
-buffer_size_train = len(train_data)
+# Decreasing Dataset size to 50K samples
+sampled_train_data_indices = np.random.choice(len(train_data), 50000, replace=False)
+sampled_train_data = train_data[sampled_train_data_indices]
+
+buffer_size_train = len(sampled_train_data)
 buffer_size_A0 = len(A0_train)
 buffer_size_boundary = len(A_boundary_train)
 
@@ -77,7 +85,7 @@ else:
 checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath=checkpoint_path, monitor='val_loss',
                                                          save_best_only=True, save_weights_only=True, verbose=1)
 
-history = {'loss': [], 'val_loss': [], 'test_loss': [], 'nlse_loss': [], 'A0_loss': [], 'Ab_loss': []}
+history = {'train_loss': [], 'val_loss': [], 'test_loss': [], 'nlse_loss': [], 'A0_loss': [], 'Ab_loss': []}
 
 # ---------------------------- Pre-Train model test ------------------------------- #
 
@@ -106,15 +114,14 @@ for epoch in range(epochs):
     epoch_Ab_loss_avg = tf.keras.metrics.Mean()
 
     # ----------------------- Shuffling and batching -----------------#
-    train_dataset = tf.data.Dataset.from_tensor_slices(train_data).shuffle(buffer_size_train).batch(batch_size,
+    train_dataset = tf.data.Dataset.from_tensor_slices(sampled_train_data).shuffle(buffer_size_train).batch(batch_size,
                                                                                                     drop_remainder=True)
     A0_dataset = tf.data.Dataset.from_tensor_slices(A0_train).shuffle(buffer_size_A0).batch(batch_size,
                                                                                             drop_remainder=True).repeat()
     boundary_dataset = tf.data.Dataset.from_tensor_slices(A_boundary_train).shuffle(buffer_size_boundary).batch(
-        batch_size,
-        drop_remainder=True).repeat()
+        batch_size, drop_remainder=True).repeat()
 
-    # Combine the datasets into one
+    # Joining training dataset
     combined_train_dataset = tf.data.Dataset.zip((train_dataset, A0_dataset, boundary_dataset))
 
     train_batch_num = 1
@@ -158,7 +165,7 @@ for epoch in range(epochs):
     Ab_loss_value = epoch_Ab_loss_avg.result().numpy()
     nlse_loss_value = epoch_nlse_loss_avg.result().numpy()
 
-    history['loss'].append(train_loss_value)
+    history['train_loss'].append(train_loss_value)
     history['val_loss'].append(val_loss_value)
     history['test_loss'].append(test_loss_value)
     history['nlse_loss'].append(nlse_loss_value)
@@ -182,6 +189,7 @@ for epoch in range(epochs):
 
         if wait >= patience:
             print("Early stopping triggered")
+            parameters["epochs"] = epoch
             break
 
     end_time = time.time()
