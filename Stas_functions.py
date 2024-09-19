@@ -34,47 +34,62 @@ def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nl
     A0_mse_term = initial_condition_loss(A0_batch, pinn_model)
     a0_avg.update_state(A0_mse_term)
 
-    Ab_mse_term = boundary_condition_loss(boundary_batch, pinn_model)
-    ab_avg.update_state(Ab_mse_term)
+    #Ab_mse_term = boundary_condition_loss(boundary_batch, pinn_model)
+    #ab_avg.update_state(Ab_mse_term)
 
-    return A0_mse_term + Ab_mse_term + nlse_loss_term
-
+    return A0_mse_term + nlse_loss_term
 
 def nlse_residual(fiber_batch, pinn_model, parameters):
-    z, t, a_real, a_image = tf.split(fiber_batch, [1, 1, 1, 1], axis=-1)
-    alpha = parameters['alpha']
-    beta_2 = parameters['beta_2']
-    gamma = parameters['gamma']
+    # Unpack input data
+    z, t, a_real, a_imag = tf.split(fiber_batch, num_or_size_splits=4, axis=-1)
+    alpha = tf.cast(parameters['alpha'], tf.complex64)
+    beta2 = tf.cast(parameters['beta2'], tf.complex64)
+    gamma = tf.cast(parameters['gamma'], tf.complex64)
+
+
 
     with tf.GradientTape(persistent=True) as tape2:
-        tape2.watch([z, t])
-        a_pred = pinn_model(tf.concat([z, t], axis=-1))
-        a_pred_real, a_pred_imag = tf.split(a_pred, 2, axis=-1)
-
-        a_t_real = tape2.gradient(a_pred_real, t)
-        a_t_imag = tape2.gradient(a_pred_imag, t)
-
-    a_z_real = tape2.gradient(a_pred_real, z)
-    a_z_imag = tape2.gradient(a_pred_imag, z)
-
-    a_pred_complex = tf.complex(a_pred_real, a_pred_imag)
-    a_z_complex = tf.cast(tf.complex(a_z_real, a_z_imag), tf.complex64)
-
+        tape2.watch([z, t])  # Watch z and t in the outer tape
+        with tf.GradientTape(persistent=True) as tape1:
+            tape1.watch([z, t])  # Watch z and t in the inner tape
+            # Forward pass
+            a_pred = pinn_model(tf.concat([z, t], axis=-1))
+            a_pred_real, a_pred_imag = tf.split(a_pred, num_or_size_splits=2, axis=-1)
+        # First derivatives with respect to z and t
+        a_z_real = tape1.gradient(a_pred_real, z)
+        a_z_imag = tape1.gradient(a_pred_imag, z)
+        a_t_real = tape1.gradient(a_pred_real, t)
+        a_t_imag = tape1.gradient(a_pred_imag, t)
+    # Second derivatives with respect to t
     a_tt_real = tape2.gradient(a_t_real, t)
     a_tt_imag = tape2.gradient(a_t_imag, t)
-    a_tt_complex = tf.complex(a_tt_real, a_tt_imag)
 
-    del tape2
+    # Construct complex variables
+    a_pred_complex = tf.cast(tf.complex(a_pred_real, a_pred_imag), tf.complex64)
+    a_z_complex = tf.cast(tf.complex(a_z_real, a_z_imag), tf.complex64)
+    a_tt_complex = tf.cast(tf.complex(a_tt_real, a_tt_imag), tf.complex64)
 
+    # Compute |A|^2
     a_pred_abs_squared = tf.cast(tf.square(tf.abs(a_pred_complex)), tf.complex64)
+
+    # Attenuation term
     attenuation_complex = (alpha / 2) * a_pred_complex
-    chrom_dis_complex = (1j * beta_2 / 2) * tf.cast(a_tt_complex, tf.complex64)
+
+    # Chromatic dispersion term
+    chrom_dis_complex = 1j * (beta2 / 2) * a_tt_complex
+
+    # Nonlinear term
     non_lin_complex = 1j * gamma * a_pred_abs_squared * a_pred_complex
 
-    nlse_residual_value = a_z_complex + chrom_dis_complex + attenuation_complex - non_lin_complex
+    # Residual calculation
+    nlse_residual_value = a_z_complex + attenuation_complex + chrom_dis_complex - non_lin_complex
+
+    # Compute the residual's magnitude
     nlse_term = tf.abs(nlse_residual_value)
 
     return nlse_term
+
+
 
 
 def initial_condition_loss(A0_batch, pinn_model):
