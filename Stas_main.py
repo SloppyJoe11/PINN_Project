@@ -33,7 +33,7 @@ with open('parameters.pkl', 'rb') as f:
     parameters = pickle.load(f)
 
 # Training parameters
-epochs = 10
+epochs = 5
 parameters['epochs'] = epochs
 batch_size = 128
 
@@ -42,8 +42,8 @@ patience = 10  # Number of epochs to wait for improvement before stopping
 best_val_loss = float('inf')
 wait = 0
 
-parameters["beta2"] = -20
-parameters["gamma"] = 1.27
+parameters["beta2"] = -20e-3
+parameters["gamma"] = 1.27e-3
 print(f'parameters: alpha = {parameters["alpha"]} beta = {parameters["beta2"]} gamma = {parameters["gamma"]}')
 # ------------------------- Data preparation --------------------------- #
 
@@ -173,7 +173,7 @@ for epoch in range(epochs):
     history['Ab_loss'].append(Ab_loss_value)
 
     print()
-    print(f"Epoch {epoch + 1}/{epochs}, Loss: {train_loss_value},"
+    print(f"Epoch {epoch + 1}/{epochs}, Train Loss: {train_loss_value},"
           f" Val Loss: {val_loss_value},"
           f" Test Loss: {test_loss_value}")
 
