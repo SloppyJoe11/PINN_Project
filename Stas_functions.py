@@ -15,7 +15,7 @@ matplotlib.use('Agg')
 
 
 # Build the model
-def build_pinn_model(input_shape=2, num_neurons=100, num_layers=4, output_shape=2):
+def build_pinn_model(input_shape=2, num_neurons=80, num_layers=5, output_shape=2):
     inputs = Input(shape=(input_shape,))
     x = Dense(num_neurons, activation='tanh')(inputs)
     for _ in range(num_layers - 1):
@@ -34,10 +34,11 @@ def train_loss(fiber_batch, A0_batch, boundary_batch, pinn_model, parameters, nl
     A0_mse_term = initial_condition_loss(A0_batch, pinn_model)
     a0_avg.update_state(A0_mse_term)
 
-    #Ab_mse_term = boundary_condition_loss(boundary_batch, pinn_model)
-    #ab_avg.update_state(Ab_mse_term)
+    Ab_mse_term = boundary_condition_loss(boundary_batch, pinn_model)
+    ab_avg.update_state(Ab_mse_term)
 
-    return A0_mse_term + nlse_loss_term
+    return A0_mse_term + nlse_loss_term + Ab_mse_term
+
 
 def nlse_residual(fiber_batch, pinn_model, parameters):
     # Unpack input data
@@ -46,20 +47,24 @@ def nlse_residual(fiber_batch, pinn_model, parameters):
     beta2 = tf.cast(parameters['beta2'], tf.complex64)
     gamma = tf.cast(parameters['gamma'], tf.complex64)
 
-
-
     with tf.GradientTape(persistent=True) as tape2:
         tape2.watch([z, t])  # Watch z and t in the outer tape
+
         with tf.GradientTape(persistent=True) as tape1:
             tape1.watch([z, t])  # Watch z and t in the inner tape
+
             # Forward pass
             a_pred = pinn_model(tf.concat([z, t], axis=-1))
             a_pred_real, a_pred_imag = tf.split(a_pred, num_or_size_splits=2, axis=-1)
-        # First derivatives with respect to z and t
+
+        # First derivatives with respect to z
         a_z_real = tape1.gradient(a_pred_real, z)
         a_z_imag = tape1.gradient(a_pred_imag, z)
+
+        # First derivatives with respect to t
         a_t_real = tape1.gradient(a_pred_real, t)
         a_t_imag = tape1.gradient(a_pred_imag, t)
+
     # Second derivatives with respect to t
     a_tt_real = tape2.gradient(a_t_real, t)
     a_tt_imag = tape2.gradient(a_t_imag, t)
@@ -150,11 +155,11 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
     Nt = parameters['Nt']  # Increased number of time points for better resolution
     dt = parameters['dt']  # Step size in t (ps)
     alpha = parameters['alpha']
-    beta_2 = parameters['beta_2']
+    beta2 = parameters['beta2']
     gamma = parameters['gamma']
 
     t = np.linspace(-T / 2, T / 2, Nt)
-    L_D = T0 ** 2 / abs(beta_2)
+    L_D = T0 ** 2 / abs(beta2)
 
     z = np.linspace(0, L, int(L / dz))
 
@@ -171,7 +176,7 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
     A_t = predictions_complex.reshape(len(z), len(t))
 
     os.makedirs('plots', exist_ok=True)
-    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta2']}_gamma_{parameters['gamma']}"
     params_dir = os.path.join('plots', params_str)
     os.makedirs(params_dir, exist_ok=True)
 
@@ -182,7 +187,7 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
     plt.colorbar(label='|A(z,t)|')
     plt.xlabel(f'Distance (z) | L_D = {round(L_D, 2)}Km')
     plt.ylabel(f'Time (t) | T0 = {T0}Ps')
-    plt.title(f'Pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta_2}, gamma={gamma}')
+    plt.title(f'Pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta2}, gamma={gamma}')
     plt.savefig(os.path.join(params_dir, 'PINN pulse propagation'))
     plt.close()
 
@@ -194,7 +199,7 @@ def plot_model_pulse_propagation(model, standardized_input, standardization_para
     ax.set_xlabel(f'Distance (z) | L_D = {round(L_D, 2)}Km')
     ax.set_ylabel(f'Time (t) | T0 = {T0}Ps')
     ax.set_zlabel('|A(z,t)|')
-    ax.set_title(f'3D view of pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta_2}, gamma={gamma}')
+    ax.set_title(f'3D view of pulse propagation using trained model |A(z,t)|, alpha={alpha}, beta={beta2}, gamma={gamma}')
     plt.savefig(os.path.join(params_dir, 'PINN pulse propagation 3D'))
     plt.close()
 
@@ -266,7 +271,7 @@ def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid
     absolut_error = np.abs((np.abs(predictions_complex)) - (np.abs(ssfm_complex)))
 
     os.makedirs('plots', exist_ok=True)
-    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta2']}_gamma_{parameters['gamma']}"
     params_dir = os.path.join('plots', params_str)
     os.makedirs(params_dir, exist_ok=True)
 
@@ -285,11 +290,11 @@ def plot_mse_heatmap(pinn_model, standardized_input, standardized_output, z_grid
 
 def plot_history(history, parameters):
     os.makedirs('plots', exist_ok=True)
-    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta_2']}_gamma_{parameters['gamma']}"
+    params_str = f"epochs_{parameters['epochs']}_alpha_{parameters['alpha']}_beta_{parameters['beta2']}_gamma_{parameters['gamma']}"
     params_dir = os.path.join('plots', params_str)
     os.makedirs(params_dir, exist_ok=True)
 
-    plt.plot(history['loss'], label='Train')
+    plt.plot(history['train_loss'], label='Train')
     plt.plot(history['val_loss'], label='Validation')
     plt.plot(history['test_loss'], label='Test')
     plt.plot(history['nlse_loss'], label='NLSE')
