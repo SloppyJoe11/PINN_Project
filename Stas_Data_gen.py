@@ -223,5 +223,3 @@ np.savez('processed_training_data.npz',
 
 print("Processed training data saved to 'processed_training_data.npz'")
 
-
-
