@@ -4,3 +4,5 @@ The aim of this project is to develop a Physics-Informed Neural Network that can
 This network is intended to potentially replace the older method of numerically solving the Non-Linear Schrödinger Equation—known as the Split Step Fourier Method (SSFM).
 SSFM is computationally intensive and thus time-consuming and power-demanding.
 We hope to address these issues with our project.
+
+First run the "data_gen" code and after that run "main"
