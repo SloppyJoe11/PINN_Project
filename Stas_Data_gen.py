@@ -15,7 +15,7 @@ A0 = np.sqrt(P0)  # Pulse Amplitude (W)
 L = 80  # Fiber length (km)
 alpha = 0  # Attenuation coefficient in m^-1
 beta2 = -20  # GVD parameter ((ps)^2/km)
-gamma = 1.27  # Non-linearity parameter (1/(W*km))
+gamma = 0  # Non-linearity parameter (1/(W*km))
 dz = 0.1  # Step size in z (km), reduced for higher accuracy
 
 # Time grid
@@ -34,7 +34,7 @@ omega = 2 * np.pi * f
 
 # Calculate dispersion length
 L_D = T0**2 / abs(beta2)
-L_n = 1 / (gamma*P0)
+L_n = 1 # / (gamma*P0)
 
 print(f'L_n = {L_n}, L_D = {L_D}')
 
@@ -93,7 +93,6 @@ def plot_pulse_3d(z, t, A_t, T0, L_D, Nt):
     ax.set_zlabel('|A(z,t)|')
     ax.set_title(f'3D view of SSFM - Pulse propagation |A(z,t)| {Nt} time samples, '
                  f'alpha = {alpha}, beta = {beta2}, gamma = {gamma}')
-    ax.set_zlim(0, 0.035)  # Lower the amplitude range
     plt.savefig('SSFM pulse 3d.png')
     plt.close()
 
@@ -128,11 +127,11 @@ A = ssfm(A, dz, L, beta2, gamma, omega, alpha)
 Z = np.linspace(0, L, int(L / dz))
 T_ = np.linspace(-T / 2, T / 2, Nt)
 
-
+A_normalized = np.abs(A) / np.max(np.abs(A))
 # Plot results
-plot_pulse_2d(Z, T_, A, T0, L_D, Nt)
-plot_pulse_3d(Z, T_, A, T0, L_D, Nt)
-plot_initial_final_pulse(A, t)
+plot_pulse_2d(Z, T_, A_normalized, T0, L_D, Nt)
+plot_pulse_3d(Z, T_, A_normalized, T0, L_D, Nt)
+plot_initial_final_pulse(A_normalized, t)
 
 # Create a 2D grid of Z and T values
 Z_grid, T_grid = np.meshgrid(Z, T_, indexing='ij')
