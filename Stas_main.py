@@ -42,8 +42,8 @@ patience = 10  # Number of epochs to wait for improvement before stopping
 best_val_loss = float('inf')
 wait = 0
 
-parameters["beta2"] = -20e-3
-parameters["gamma"] = 1.27e-3
+parameters["beta2"] = -20
+parameters["gamma"] = 0
 print(f'parameters: alpha = {parameters["alpha"]} beta = {parameters["beta2"]} gamma = {parameters["gamma"]}')
 # ------------------------- Data preparation --------------------------- #
 
@@ -121,7 +121,11 @@ for epoch in range(epochs):
     boundary_dataset = tf.data.Dataset.from_tensor_slices(A_boundary_train).shuffle(buffer_size_boundary).batch(
         batch_size, drop_remainder=True).repeat()
 
-    # Joining training dataset
+    # TODO: delete after test!!!!
+    all_dataset = tf.data.Dataset.from_tensor_slices(train_data).shuffle(buffer_size_train).batch(batch_size,
+                                                                                                    drop_remainder=True)
+
+    # Joining training dataset  TODO: change all_dataset back to train_dataset after test!!!
     combined_train_dataset = tf.data.Dataset.zip((train_dataset, A0_dataset, boundary_dataset))
 
     train_batch_num = 1
