@@ -1,0 +1,115 @@
+import tensorflow as tf
+
+import tensorflow as tf
+import numpy as np
+
+# Accurate analytical solution split into real and imaginary parts
+def analytical_solution_real(z, T, T0, beta2):
+    magnitude = tf.sqrt(T0**4 + (beta2 * z)**2)
+    phase = tf.atan(beta2 * z / T0**2)
+    
+    denominator_real = T0**2 / magnitude
+    denominator_imag = beta2 * z / magnitude
+    
+    exponential_real = tf.exp(- T**2 * denominator_real / 2)
+    exponential_imag = - T**2 * denominator_imag / 2
+    
+    U_real = T0 / tf.sqrt(magnitude) * exponential_real * tf.cos(exponential_imag)
+    return U_real
+
+def analytical_solution_imag(z, T, T0, beta2):
+    magnitude = tf.sqrt(T0**4 + (beta2 * z)**2)
+    phase = tf.atan(beta2 * z / T0**2)
+    
+    denominator_real = T0**2 / magnitude
+    denominator_imag = beta2 * z / magnitude
+    
+    exponential_real = tf.exp(- T**2 * denominator_real / 2)
+    exponential_imag = - T**2 * denominator_imag / 2
+    
+    U_imag = T0 / tf.sqrt(magnitude) * exponential_real * tf.sin(exponential_imag)
+    return U_imag
+def nlse_residual_real(z, T, T0, beta2):
+    with tf.GradientTape(persistent=True) as tape2:
+        tape2.watch([z, T])  # Watch z and T
+
+        with tf.GradientTape(persistent=True) as tape1:
+            tape1.watch([z, T])  # Watch z and T in inner tape
+
+            # Analytical solution split into real and imaginary parts
+            U_real = analytical_solution_real(z, T, T0, beta2)
+            U_imag = analytical_solution_imag(z, T, T0, beta2)
+
+            # Debugging: print the values of U_real and U_imag
+            tf.print("U_real:", U_real)
+            tf.print("U_imag:", U_imag)
+
+        # First derivatives with respect to z and T
+        a_z_real = tape1.gradient(U_real, z)
+        a_z_imag = tape1.gradient(U_imag, z)
+        
+        # Debugging: print the values of the derivatives
+        tf.print("a_z_real:", a_z_real)
+        tf.print("a_z_imag:", a_z_imag)
+
+        a_t_real = tape1.gradient(U_real, T)
+        a_t_imag = tape1.gradient(U_imag, T)
+
+        # Debugging: print the values of the derivatives
+        tf.print("a_t_real:", a_t_real)
+        tf.print("a_t_imag:", a_t_imag)
+
+        # Check if any of the gradients are None
+        if a_z_real is None or a_z_imag is None:
+            raise ValueError("a_z_real or a_z_imag returned None. Check the gradients computation.")
+        
+        if a_t_real is None or a_t_imag is None:
+            raise ValueError("a_t_real or a_t_imag returned None. Check the gradients computation.")
+
+    # Second derivatives with respect to T
+    a_tt_real = tape2.gradient(a_t_real, T)
+    a_tt_imag = tape2.gradient(a_t_imag, T)
+
+    # Debugging: print the values of the second derivatives
+    tf.print("a_tt_real:", a_tt_real)
+    tf.print("a_tt_imag:", a_tt_imag)
+
+    # Check if any of the second derivatives are None
+    if a_tt_real is None or a_tt_imag is None:
+        raise ValueError("a_tt_real or a_tt_imag returned None. Check the second derivatives computation.")
+
+    del tape1, tape2  # Clear tapes to avoid memory issues
+
+    # NLSE Residual calculation without gamma term
+    chrom_disp_real = (beta2 / 2) * a_tt_real
+    chrom_disp_imag = (beta2 / 2) * a_tt_imag
+
+    # Residual calculation
+    nlse_residual_real = a_z_real + chrom_disp_real
+    nlse_residual_imag = a_z_imag + chrom_disp_imag
+
+    # Compute the residual's magnitude
+    nlse_residual_magnitude = tf.sqrt(tf.square(nlse_residual_real) + tf.square(nlse_residual_imag))
+
+    return nlse_residual_magnitude
+
+# Parameters
+T0_value = 1.0  # Pulse width
+beta2_value = -0.02  # Chromatic dispersion parameter
+z_value = 1.0  # Propagation distance
+T_value = 0.5  # Time
+
+# Create a single test point for z and T
+z_tensor = tf.constant([[z_value]], dtype=tf.float64)
+T_tensor = tf.constant([[T_value]], dtype=tf.float64)
+
+# Calculate U_real and U_imag with the accurate formulas
+U_real = analytical_solution_real(z_tensor, T_tensor, T0_value, beta2_value)
+U_imag = analytical_solution_imag(z_tensor, T_tensor, T0_value, beta2_value)
+
+print("U_real:", U_real.numpy())
+print("U_imag:", U_imag.numpy())
+
+# Verify if the residual is smaller with the accurate U
+residual = nlse_residual_real(z_tensor, T_tensor, T0_value, beta2_value)
+print("Residual:", residual.numpy())
