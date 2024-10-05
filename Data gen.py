@@ -4,19 +4,26 @@ import pickle
 from sklearn.model_selection import train_test_split
 from scipy.fft import fft, ifft, fftshift
 
-# Set the backend for Matplotlib to 'Agg'
-import matplotlib
-matplotlib.use('Agg')
-
 # Constants
-T0 = 20  # Pulse width (ps)
-P0 = 1e-3  # Pulse Power (W)
-A0 = np.sqrt(P0)  # Pulse Amplitude (W)
-L = 80  # Fiber length (km)
 alpha = 0  # Attenuation coefficient in m^-1
 beta2 = -20  # GVD parameter ((ps)^2/km)
-gamma = 0  # Non-linearity parameter (1/(W*km))
-dz = 0.1  # Step size in z (km), reduced for higher accuracy
+gamma = 1.27  # Non-linearity parameter (1/(W*km))
+
+P0 = 1e-3  # Pulse Power (W)
+A0 = np.sqrt(P0)  # Pulse Amplitude (W)
+T0 = 20  # Pulse width (ps)
+
+# Calculate dispersion length
+L_D = T0**2 / abs(beta2)
+L_n = 1 / (gamma*P0)
+
+L = 4*L_D  # Fiber length (km)
+Nz = 800
+dz = L / Nz  # Step size in z (km), reduced for higher accuracy
+
+# Splitting
+train_percentage = 0.725  # Train ratio out of total number of data samples
+validation_percentage = 0.025  # Validation ratio out of total number of data samples
 
 # Time grid
 T = 40 * T0
@@ -28,13 +35,16 @@ t = np.linspace(-T / 2, T / 2, Nt)
 # Initial pulse - gaussian
 A = A0 * np.exp(-t ** 2 / T0 ** 2)
 
+# Initial pulse - Multiple gaussian
+# A = A0 * (np.exp(-t ** 2 / T0 ** 2) + 0.75*np.exp(-(t+10*T0) ** 2 / T0 ** 2) + 0.5*np.exp(-(t-10*T0) ** 2 / T0 ** 2)
+#          + 0.25*np.exp(-(t+5*T0) ** 2 / T0 ** 2) + np.exp(-(t-5*T0) ** 2 / T0 ** 2))
+
+# Initial pulse - Soliton
+# A = A0 / np.cosh(t/T0)
+
 # Frequency grid
 f = np.fft.fftfreq(Nt, dt)
 omega = 2 * np.pi * f
-
-# Calculate dispersion length
-L_D = T0**2 / abs(beta2)
-L_n = 1 # / (gamma*P0)
 
 print(f'L_n = {L_n}, L_D = {L_D}')
 
@@ -127,11 +137,12 @@ A = ssfm(A, dz, L, beta2, gamma, omega, alpha)
 Z = np.linspace(0, L, int(L / dz))
 T_ = np.linspace(-T / 2, T / 2, Nt)
 
-A_normalized = np.abs(A) / np.max(np.abs(A))
+# A_normalized = np.abs(A) / np.max(np.abs(A))
+
 # Plot results
-plot_pulse_2d(Z, T_, A_normalized, T0, L_D, Nt)
-plot_pulse_3d(Z, T_, A_normalized, T0, L_D, Nt)
-plot_initial_final_pulse(A_normalized, t)
+plot_pulse_2d(Z, T_, A, T0, L_D, Nt)
+plot_pulse_3d(Z, T_, A, T0, L_D, Nt)
+plot_initial_final_pulse(A, t)
 
 # Create a 2D grid of Z and T values
 Z_grid, T_grid = np.meshgrid(Z, T_, indexing='ij')
@@ -143,45 +154,19 @@ output_data = np.stack((output_data.real, output_data.imag), axis=-1)
 
 combined_data = np.concatenate((input_data, output_data), axis=-1)
 
-# Calculate indices for A_0 and boundary conditions on original combined data
-A_0_indices = np.where(combined_data[:, 0] == 0)[0]
-
-boundary_indices_minus_T = np.where(combined_data[:, 1] == -T/2)[0]
-boundary_indices_plus_T = np.where(combined_data[:, 1] == T/2)[0]
-
-# Join the indices
-combined_indices = np.concatenate((A_0_indices, boundary_indices_minus_T, boundary_indices_plus_T))
+z_values = combined_data[:, 0]
+train_split_index = np.searchsorted(z_values, train_percentage * 4*L_D)
+val_split_index = np.searchsorted(z_values, (train_percentage + validation_percentage) * 4*L_D)
 
 # Normalize the input and output data
 standardized_input_data, standardized_output_data, standardization_params = standardize_data(input_data, output_data)
 standardized_combined_data = np.concatenate((standardized_input_data, standardized_output_data), axis=-1)
 
-# Extract the rows for A_0 and boundary conditions
-A_0 = standardized_combined_data[A_0_indices]
-boundary_A_minus_T = standardized_combined_data[boundary_indices_minus_T]
-boundary_A_plus_T = standardized_combined_data[boundary_indices_plus_T]
-A_boundary = np.concatenate((boundary_A_minus_T, boundary_A_plus_T), axis=0)
+# Split data 0-2.4L_D (60%) for train, 2.4L_D-3L_D (15%) for validation and 3L_D-4L_D (25%) for test
+train_data = standardized_combined_data[:train_split_index]
+val_data = standardized_combined_data[train_split_index: val_split_index]
+test_data = standardized_combined_data[val_split_index:]
 
-
-print(standardized_combined_data.shape)
-standardized_combined_data_fiber = np.delete(standardized_combined_data, combined_indices, axis=0)
-print(standardized_combined_data_fiber.shape)
-
-# Split the dataset into training and (validation + test)
-train_data, val_test_data = train_test_split(
-    standardized_combined_data_fiber,
-    test_size=0.3,
-    random_state=42)
-
-# Further split for validation and test sets
-val_data, test_data = train_test_split(
-    val_test_data,
-    test_size=0.5,
-    random_state=42)
-
-# Split A_0 and A_boundary into training and validation sets
-A0_train, A0_val = train_test_split(A_0, test_size=0.3, random_state=42)
-A_boundary_train, A_boundary_val = train_test_split(A_boundary, test_size=0.3, random_state=42)
 
 # Dictionary of parameters
 parameters = {
@@ -189,6 +174,8 @@ parameters = {
     'P0': P0,
     'A0': A0,
     'L': L,
+    'L_D': L_D,
+    'L_n': L_n,
     'alpha': alpha,
     'beta2': beta2,
     'gamma': gamma,
@@ -196,7 +183,9 @@ parameters = {
     'T': T,
     'Nt': Nt,
     'dt': dt,
-    't': t
+    't': t,
+    'train_percentage': train_percentage,
+    'validation_percentage': validation_percentage,
 }
 
 with open('parameters.pkl', 'wb') as f:
@@ -210,8 +199,6 @@ np.savez('processed_training_data.npz',
          train_data=train_data,
          test_data=test_data,                   val_data=val_data,
 
-         A0_train=A0_train,                     A0_val=A0_val,
-         A_boundary_train=A_boundary_train,     A_boundary_val=A_boundary_val,
          Z_grid=Z_grid,                         T_grid=T_grid,
 
          standardized_combined_data=standardized_combined_data,
@@ -221,4 +208,3 @@ np.savez('processed_training_data.npz',
          )
 
 print("Processed training data saved to 'processed_training_data.npz'")
-
