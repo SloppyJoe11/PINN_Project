@@ -5,4 +5,4 @@ This network is intended to potentially replace the older method of numerically 
 SSFM is computationally intensive and thus time-consuming and power-demanding.
 We hope to address these issues with our project.
 
-First run the "data_gen" code and after that run "main"
+First run the "Data gen" code and after that run "main"
